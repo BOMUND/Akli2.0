@@ -22,7 +22,7 @@ ABSOLUTE RULES:
 - NEVER reference previous step results in parameters. Every step is independent.
 - Use web_search for ANY information retrieval, research, or current data.
 - Use file_controller to save content to disk.
-- Use cmd_control to open files or run system commands.
+- Use open_app to open applications by name.
 - Max 5 steps. Use the minimum steps needed.
 
 AVAILABLE TOOLS AND THEIR PARAMETERS:
@@ -48,10 +48,6 @@ file_controller
   path: string — use "desktop" for Desktop folder
   name: string — filename
   content: string — file content (for write/create_file)
-
-cmd_control
-  task: string (required) — natural language description of what to do
-  visible: boolean (optional)
 
 computer_settings
   action: string (required)
@@ -88,7 +84,7 @@ Steps:
 web_search | query: "mechanical engineering overview definition history"
 web_search | query: "mechanical engineering applications and future trends"
 file_controller | action: write, path: desktop, name: mechanical_engineering.txt, content: "MECHANICAL ENGINEERING RESEARCH\n\nThis file will be filled with web research results."
-cmd_control | task: "open mechanical_engineering.txt on desktop with notepad"
+open_app | app_name: notepad
 
 Goal: "What is the price of Bitcoin"
 Steps:
