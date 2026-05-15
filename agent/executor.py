@@ -27,10 +27,12 @@ def _get_api_key() -> str:
         return json.load(f)["gemini_api_key"]
 
 def _run_generated_code(description: str, speak: Callable | None = None) -> str:
+    # Фолбэк-ветка для неизвестных инструментов:
+    # просим модель написать одноразовый Python-скрипт и запускаем его в сандбоксе.
     import google.generativeai as genai
 
     if speak:
-        speak("Writing custom code for this task, sir.")
+        speak("Writing custom code for this task.")
 
     home      = Path.home()
     desktop   = home / "Desktop"
@@ -180,9 +182,7 @@ def _call_tool(tool: str, parameters: dict, speak: Callable | None) -> str:
     elif tool == "web_search":
         from actions.web_search import web_search
         return web_search(parameters=parameters, player=None) or "Done."
-    elif tool == "game_updater":
-        from actions.game_updater import game_updater
-        return game_updater(parameters=parameters, player=None, speak=speak) or "Done."
+
     elif tool == "browser_control":
         from actions.browser_control import browser_control
         return browser_control(parameters=parameters, player=None) or "Done."
@@ -191,38 +191,13 @@ def _call_tool(tool: str, parameters: dict, speak: Callable | None) -> str:
         from actions.file_controller import file_controller
         return file_controller(parameters=parameters, player=None) or "Done."
 
-    elif tool == "cmd_control":
-        from actions.cmd_control import cmd_control
-        return cmd_control(parameters=parameters, player=None) or "Done."
-
-    elif tool == "code_helper":
-        from actions.code_helper import code_helper
-        return code_helper(parameters=parameters, player=None, speak=speak) or "Done."
-
     elif tool == "dev_agent":
         from actions.dev_agent import dev_agent
         return dev_agent(parameters=parameters, player=None, speak=speak) or "Done."
 
-    elif tool == "screen_process":
-        from actions.screen_processor import screen_process
-        screen_process(parameters=parameters, player=None)
-        return "Screen captured and analyzed."
-
-    elif tool == "send_message":
-        from actions.send_message import send_message
-        return send_message(parameters=parameters, player=None) or "Done."
-
     elif tool == "reminder":
         from actions.reminder import reminder
         return reminder(parameters=parameters, player=None) or "Done."
-
-    elif tool == "youtube_video":
-        from actions.youtube_video import youtube_video
-        return youtube_video(parameters=parameters, player=None) or "Done."
-
-    elif tool == "weather_report":
-        from actions.weather_report import weather_action
-        return weather_action(parameters=parameters, player=None) or "Done."
 
     elif tool == "computer_settings":
         from actions.computer_settings import computer_settings
@@ -241,10 +216,6 @@ def _call_tool(tool: str, parameters: dict, speak: Callable | None) -> str:
         if not description:
             raise ValueError("generated_code requires a 'description' parameter.")
         return _run_generated_code(description, speak=speak)
-
-    elif tool == "flight_finder":
-        from actions.flight_finder import flight_finder
-        return flight_finder(parameters=parameters, player=None, speak=speak) or "Done."
 
     else:
         print(f"[Executor] ⚠️ Unknown tool '{tool}' — falling back to generated_code")
@@ -271,7 +242,7 @@ class AgentExecutor:
             steps = plan.get("steps", [])
 
             if not steps:
-                msg = "I couldn't create a valid plan for this task, sir."
+                msg = "I couldn't create a valid plan for this task."
                 if speak: speak(msg)
                 return msg
 
@@ -281,7 +252,7 @@ class AgentExecutor:
 
             for step in steps:
                 if cancel_flag and cancel_flag.is_set():
-                    if speak: speak("Task cancelled, sir.")
+                    if speak: speak("Task cancelled.")
                     return "Task cancelled."
 
                 step_num = step.get("step", "?")
@@ -330,7 +301,7 @@ class AgentExecutor:
                             break
 
                         elif decision == ErrorDecision.ABORT:
-                            msg = f"Task aborted, sir. {recovery.get('reason', '')}"
+                            msg = f"Task aborted. {recovery.get('reason', '')}"
                             if speak: speak(msg)
                             return msg
 
@@ -339,7 +310,7 @@ class AgentExecutor:
                             if fix_suggestion and tool != "generated_code":
                                 try:
                                     fixed_step = generate_fix(step, error_msg, fix_suggestion)
-                                    if speak: speak("Trying an alternative approach, sir.")
+                                    if speak: speak("Trying an alternative approach.")
                                     res = _call_tool(
                                         fixed_step["tool"],
                                         fixed_step["parameters"],
@@ -369,17 +340,18 @@ class AgentExecutor:
                 return self._summarize(goal, completed_steps, speak)
 
             if replan_attempts >= self.MAX_REPLAN_ATTEMPTS:
-                msg = f"Task failed after {replan_attempts} replan attempts, sir."
+                msg = f"Task failed after {replan_attempts} replan attempts."
                 if speak: speak(msg)
                 return msg
 
-            if speak: speak("Adjusting my approach, sir.")
+            if speak: speak("Adjusting my approach.")
 
             replan_attempts += 1
             plan = replan(goal, completed_steps, failed_step, failed_error)
 
     def _summarize(self, goal: str, completed_steps: list, speak: Callable | None) -> str:
-        fallback = f"All done, sir. Completed {len(completed_steps)} steps for: {goal[:60]}."
+        # Короткая сводка для пользователя. При отказе модели — отдаём фолбэковый текст.
+        fallback = f"All done. Completed {len(completed_steps)} steps for: {goal[:60]}."
         try:
             import google.generativeai as genai
             genai.configure(api_key=_get_api_key())
@@ -389,7 +361,7 @@ class AgentExecutor:
                 f'User goal: "{goal}"\n'
                 f"Completed steps:\n{steps_str}\n\n"
                 "Write a single natural sentence summarizing what was accomplished. "
-                "Address the user as 'sir'. Be direct and positive."
+                "Be direct, neutral, and positive."
             )
             response = model.generate_content(prompt)
             summary  = response.text.strip()
