@@ -1,5 +1,5 @@
 """
-file_processor.py — JARVIS Universal File Processor
+file_processor.py — универсальный обработчик файлов для Akli
 
 Supported types:
   image   → describe, ocr, resize, convert, compress, crop

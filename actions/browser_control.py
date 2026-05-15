@@ -184,13 +184,11 @@ class _BrowserThread:
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
         return future.result(timeout=timeout)
 
-    # ── Tarayıcı ve sayfa yönetimi ───────────────────────────────────────────
+    # ── Управление браузером и вкладками ────────────────────────────────────
 
     async def _launch_browser_if_needed(self):
-        """
-        Tarayıcıyı başlatır. Zaten açıksa hiçbir şey yapmaz.
-        Her zaman default tarayıcıyı kullanır, özel sekme açmaz.
-        """
+        # Стартует браузер, если он ещё не запущен. Держимся дефолтного
+        # браузера пользователя, приватную вкладку не открываем.
         if self._browser and self._browser.is_connected():
             return
 
@@ -198,12 +196,12 @@ class _BrowserThread:
         self._engine_name, self._exe_path, self._channel, self._is_opera = _find_browser_executable(prog_id)
         engine = getattr(self._playwright, self._engine_name)
 
-        # Temel chromium argümanları
+        # Базовые флаги для chromium-ядра.
         chromium_args = ["--start-maximized"]
 
         if self._is_opera:
-            # Opera GX bazı sürümlerde varsayılan olarak private modda başlar.
-            # Aşağıdaki flag'ler bunu engeller.
+            # Opera GX в некоторых версиях стартует в приватном режиме по умолчанию —
+            # флаги ниже это выключают.
             chromium_args += [
                 "--disable-features=OperaPrivacyMode",
                 "--no-private",
@@ -233,13 +231,9 @@ class _BrowserThread:
             )
 
     async def _get_page(self):
-        """
-        Mevcut sayfayı döndürür.
-        - Tarayıcı kapalıysa açar.
-        - Context yoksa oluşturur.
-        - Sayfa kapalıysa yeni sekme açar (aynı pencerede).
-        - Sayfa zaten açıksa aynı sayfayı döndürür (yeni pencere açmaz).
-        """
+        # Возвращает активную страницу. Если браузер закрыт — поднимает его.
+        # Если контекста нет — создаёт. Если страница закрыта — открывает новую
+        # вкладку в текущем окне (не новое окно).
         await self._launch_browser_if_needed()
 
         if self._context is None:

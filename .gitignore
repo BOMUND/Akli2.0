@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+config/api_keys.json
+memory/memory.json
+.venv/
+venv/
+.idea/
+.vscode/

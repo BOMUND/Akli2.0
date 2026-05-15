@@ -1,82 +1,61 @@
-# 🤖 MARK XXXIX-OR (39)
-### The Ultimate Cross-Platform Personal AI Assistant — By FatihMakes
+# Akli 2.0
 
-> 📺 **[Watch the full setup video on YouTube](https://youtu.be/ldvDNzwnM8k)**
+Голосовой ИИ-ассистент с реальным временем: слушает микрофон через Gemini Live,
+понимает команды на любом языке и сам решает, какой инструмент дёрнуть —
+открыть приложение, поискать в браузере, поработать с файлами, поставить
+напоминание или запустить мини-агента на дев-задачу.
 
-A real-time voice AI that can hear, see, understand, and control your computer — on any OS. Supporting Windows, macOS, and Linux. Local execution. Zero subscriptions. Engineered for total autonomy.
+## Что умеет
 
----
-
-## ✨ Overview
-
-MARK XXXIX-OR represents the pinnacle of the Jarvis series, evolving into a more flexible and robust system. It bridges the gap between the operating system and human intent. Through natural dialogue, Mark 39 analyzes your screen, processes uploaded documents, and executes complex workflows with a brand-new, adaptive interface.
-
-It's not just an assistant — it's an extension of your digital life.
-
----
-
-## 🚀 Capabilities
-
-### Core Features
-| Feature | Description |
+| Возможность | Описание |
 |---|---|
-| 🎙️ Real-time Voice | Ultra-low latency conversation in any language |
-| 🖥️ System Control | Launch apps, manage files, execute terminal commands |
-| 🧩 Autonomous Tasks | High-level planning for complex, multi-step goals |
-| 👁️ Visual Awareness | Real-time screen processing and webcam vision |
-| 🧠 Persistent Memory | Deeply remembers your projects, preferences, and personal context |
-| ⌨️ Hybrid Input | Seamlessly switch between keyboard typing and voice commands |
+| Голос в реальном времени | Низкая задержка, любой язык, прерывание речи на лету |
+| Управление системой | Запуск приложений, громкость/яркость, окна, скриншоты |
+| Файлы и документы | PDF, Word, Excel, код, аудио, видео — анализ и преобразование |
+| Браузер | Открытие сайтов, поиск, клики, заполнение форм через Playwright |
+| Напоминания | Планировщик Windows для отложенных уведомлений |
+| Долговременная память | Запоминает имя, проекты, привычки и подтягивает их в промпт |
+| Мульти-шаговые задачи | Планировщик разбивает цель на шаги и сам их выполняет |
 
----
+## Стек
 
-## 🆕 What's New in XXXIX-OR
+- Python 3.11+ (рекомендую 3.12)
+- Gemini Live API — голосовой канал и tool-calling
+- OpenRouter (бесплатные модели) — текстовая аналитика, память, переводы
+- PyQt6 — UI
+- Playwright — управление браузером
+- Windows-only зависимости (pycaw / comtypes / win10toast) — используются
+  только в `actions/computer_settings.py` и `actions/reminder.py`
 
-- 📂 **Advanced File Handling** — New support for direct file uploads. Drop PDFs, source code, or images into the assistant to have them analyzed, summarized, or edited instantly.
-- 🎨 **Adaptive & Flexible UI** — A complete overhaul of the interface. The new UI is fully resizable and responsive, featuring transparency controls and customizable layouts to fit your workspace perfectly.
-- 🐧🍎 **Refined Cross-Platform Stability** — Major fixes for macOS and Linux compatibility. Core system actions are now more consistent across all three major operating systems.
-- ⚡ **Optimized Core Engine** — Significant performance boost in tool-calling logic and response generation, resulting in a 40% faster interaction speed.
-- 🔀 **OpenRouter Integration** — Selected action modules (web search, memory, flight finder, desktop control, and more) now route their LLM calls through OpenRouter's free-tier models. This significantly increases the effective request limit without any additional cost, while Gemini Live continues to handle real-time voice and tool-calling.
-
----
-
-## ⚡ Quick Start
+## Быстрый старт
 
 ```bash
-git clone https://github.com/FatihMakes/Mark-XXXIX-OR.git
-cd Mark-XXXIX-OR
-pip install -r requirements.txt
-playwright install
+git clone https://github.com/BOMUND/Akli2.0.git
+cd Akli2.0
+python setup.py
 python main.py
 ```
 
-> ⚠️ **Installation Note:** To keep the repository lightweight, some OS-specific dependencies are not bundled in `requirements.txt`. If you run into a `ModuleNotFoundError`, simply install the missing package via `pip install <module_name>` for your specific system.
+При первом запуске UI попросит вставить ключи Gemini и OpenRouter — они
+сохранятся в `config/api_keys.json` (этот файл в `.gitignore`).
 
----
+## Структура
 
-## 📋 Requirements
+```
+main.py                — точка входа, Gemini Live + диспетчер tool-call'ов
+ui.py                  — PyQt6-интерфейс (HUD, лог, оверлей настройки)
+or_client.py           — клиент OpenRouter с пулом моделей и fallback'ом
+core/prompt.txt        — системный промпт ассистента
+config/                — настройки и API-ключи
+memory/                — JSON-память пользователя
+actions/               — конкретные инструменты (browser_control, file_*,
+                          reminder, dev_agent, web_search, computer_*, ...)
+agent/                 — планировщик и исполнитель мульти-шаговых задач
+```
 
-| Requirement | Details |
-|---|---|
-| **OS** | Windows 10/11, macOS, or Linux |
-| **Python** | 3.11 or 3.12 |
-| **Microphone** | Required for voice interaction |
-| **API Keys** | Free Gemini API key + Free OpenRouter API key |
+## Зачем
 
----
-
-## ⚠️ License
-
-Personal and non-commercial use only.
-Licensed under **[Creative Commons BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/)**.
-
----
-
-## 👤 Connect with the Creator
-
-Engineered by a developer building a real-world JARVIS-style assistant.
-⭐ **Star the repository to support the journey to Mark 100.**
-
-| Platform | Link |
-|---|---|
-| YouTube | [@FatihMakes](https://www.youtube.com/@FatihMakes) |
-| Instagram | [@fatihmakes](https://www.instagram.com/fatihmakes) |
+Учебный проект: хотелось своими руками собрать ассистента, который не висит
+на одном LLM-провайдере, а раздаёт нагрузку между Gemini (голос) и
+OpenRouter (текст/анализ), и при этом честно умеет нажимать кнопки в
+системе, а не только болтать.

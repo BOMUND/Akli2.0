@@ -86,8 +86,8 @@ class OpenRouterClient:
         self._headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type":  "application/json",
-            "HTTP-Referer":  "https://github.com/mark-xxv",
-            "X-Title":       "MARK XXV",
+            "HTTP-Referer":  "https://github.com/BOMUND/Akli2.0",
+            "X-Title":       "Akli",
         }
 
     def _is_rate_limited(self, model: str) -> bool:
@@ -199,7 +199,7 @@ class OpenRouterClient:
         self,
         prompt: str,
         system: str = (
-            "You are a component of MARK XXV, an AI assistant inspired by JARVIS. "
+            "You are a component of Akli, a personal AI assistant. "
             "Be concise, helpful, and precise."
         ),
         model: Optional[str] = None,
@@ -327,8 +327,9 @@ class OpenRouterClient:
 client = OpenRouterClient()
 
 if __name__ == "__main__":
+    # Компонентный самотест клиента. Запускается отдельно: `python or_client.py`.
     print("=" * 55)
-    print("  MARK XXV — OpenRouter Client Self-Test")
+    print("  Akli — OpenRouter Client Self-Test")
     print("=" * 55)
 
     print("\n[TEST 1] Basic chat...")
@@ -354,8 +355,8 @@ if __name__ == "__main__":
     try:
         history = [
             {"role": "system",    "content": "You are a helpful assistant. Be brief."},
-            {"role": "user",      "content": "My name is Tony."},
-            {"role": "assistant", "content": "Hello Tony, how can I help you?"},
+            {"role": "user",      "content": "My name is Alex."},
+            {"role": "assistant", "content": "Hello Alex, how can I help you?"},
             {"role": "user",      "content": "What is my name?"},
         ]
         reply = client.multi_turn(history)
