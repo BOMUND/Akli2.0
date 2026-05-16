@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "akli"
+version = "2.0.0"
+description = "Akli 2.0 — голосовой ассистент на базе Gemini Live API"
+readme = "readme.md"
+requires-python = ">=3.10"
+authors = [{ name = "BOMUND" }]
+
+dependencies = [
+    "google-genai",
+    "sounddevice",
+    "PyQt6",
+    "pillow",
+    "pyautogui",
+    "pyperclip",
+    "psutil",
+    "send2trash",
+    "dateparser",
+    "requests",
+    "duckduckgo-search",
+    "playwright",
+    "comtypes; sys_platform == 'win32'",
+    "pycaw; sys_platform == 'win32'",
+    "win10toast; sys_platform == 'win32'",
+]
+
+[project.scripts]
+akli = "akli.app:main"
+
+[tool.setuptools.packages.find]
+include = ["akli*"]

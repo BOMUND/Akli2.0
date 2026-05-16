@@ -1,0 +1,4 @@
+# Runtime data lives here:
+#   state/memory.json    — long-term memory
+#   state/reminders.json — pending reminders
+#   state/appcache.json  — Get-StartApps cache
