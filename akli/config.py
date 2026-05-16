@@ -52,18 +52,11 @@ class AppConfig:
     use_openrouter:     bool = False
     openrouter_model:   str  = "google/gemma-3-27b-it:free"
     os_system:          str  = ""   # "windows" | "mac" | "linux"
-    # Модель Gemini Live. Дефолт — «2.0-flash-live-001» (стабильный
-    # GA-id для Gemini Developer API на v1beta, поддерживает tools).
-    #
-    # Не путать:
-    # * gemini-live-2.5-flash-preview — отключён Vertex AI (см. livekit/agents#4414);
-    # * gemini-2.5-flash-native-audio-preview-12-2025 — работает, но ловит
-    #   1011 internal error через 30 с (см. googleapis/python-genai#985).
-    #
-    # При желании можно переключиться в config/akli.json на:
-    # * gemini-2.0-flash-live-001 — стабильный
-    # * gemini-2.5-flash-native-audio-preview-12-2025 — новее качество голоса
-    gemini_live_model:  str  = "gemini-2.0-flash-live-001"
+    # Модель Gemini Live. Оставляем «native-audio-preview-12-2025» — другие
+    # варианты либо выключены (вариант *-2.5-flash-preview, см.
+    # livekit/agents#4414), либо хуже по голосу. Предыдущие жалобы на
+    # эту модель оказались багом на нашей стороне (см. фикс в _recv_loop).
+    gemini_live_model:  str  = "gemini-2.5-flash-native-audio-preview-12-2025"
 
     def is_ready(self) -> bool:
         return bool(self.gemini_api_key) and bool(self.os_system)
@@ -92,6 +85,7 @@ def _atomic_write(path: Path, data: str) -> None:
 # на v1beta. При загрузке старого конфига эти значения заменяем на дефолт.
 _BROKEN_LIVE_MODELS = {
     "gemini-live-2.5-flash-preview",        # отключён в dev API
+    "gemini-2.0-flash-live-001",            # рабочий, но хуже по голосу
 }
 
 

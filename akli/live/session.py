@@ -299,31 +299,46 @@ class LiveSession:
             raise
 
     async def _recv_loop(self) -> None:
+        """Читает сообщения от сервера в течение всей жизни сессии.
+
+        Важный нюанс SDK ``google-genai``: публичный ``session.receive()``
+        внутри делает ``break`` после первого ``turn_complete``. Один вызов
+        = один ход разговора. Для непрерывного диалога нужно вызывать
+        ``receive()`` в цикле: внешний ``while`` — «следующий ход»,
+        внутренний ``async for`` — порции внутри хода.
+
+        Без этого цикла после первого обмена мы переставали читать
+        WebSocket: серверный буфер переполнялся, send-сторона TCP
+        встречала backpressure, send_realtime_input висел > 5 с —
+        и мы переподключались. Новый разговор живёт тоже ровно один ход в
+        тех же условиях — цикл с нулевыми последствиями.
+        """
         assert self._session is not None
-        async for response in self._session.receive():
-            if response.data:
-                if self._player is not None:
-                    self._player.enqueue(response.data)
+        while self._session is not None:
+            async for response in self._session.receive():
+                if response.data:
+                    if self._player is not None:
+                        self._player.enqueue(response.data)
 
-            sc = response.server_content
-            if sc is not None:
-                if sc.output_transcription and sc.output_transcription.text:
-                    self._out_buf.append(sc.output_transcription.text)
-                if sc.input_transcription and sc.input_transcription.text:
-                    self._in_buf.append(sc.input_transcription.text)
-                if sc.turn_complete:
-                    self._state.on_turn_complete()
-                    await self._on_turn_complete()
+                sc = response.server_content
+                if sc is not None:
+                    if sc.output_transcription and sc.output_transcription.text:
+                        self._out_buf.append(sc.output_transcription.text)
+                    if sc.input_transcription and sc.input_transcription.text:
+                        self._in_buf.append(sc.input_transcription.text)
+                    if sc.turn_complete:
+                        self._state.on_turn_complete()
+                        await self._on_turn_complete()
 
-            # Хэндл возобновления сессии — запоминаем, чтобы переконнект был
-            # «прозрачным» и мы не теряли историю разговора.
-            sru = getattr(response, "session_resumption_update", None)
-            if sru is not None and getattr(sru, "resumable", False) and sru.new_handle:
-                self._resume_handle = sru.new_handle
+                # Хэндл возобновления сессии — запоминаем, чтобы переконнект был
+                # «прозрачным» и мы не теряли историю разговора.
+                sru = getattr(response, "session_resumption_update", None)
+                if sru is not None and getattr(sru, "resumable", False) and sru.new_handle:
+                    self._resume_handle = sru.new_handle
 
-            tc = response.tool_call
-            if tc is not None and tc.function_calls:
-                await self._handle_tool_calls(tc.function_calls)
+                tc = response.tool_call
+                if tc is not None and tc.function_calls:
+                    await self._handle_tool_calls(tc.function_calls)
 
     async def _on_turn_complete(self) -> None:
         user_text = "".join(self._in_buf).strip()
