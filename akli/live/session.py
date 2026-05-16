@@ -29,8 +29,8 @@ from akli.live.audio import (
     SEND_SAMPLE_RATE,
 )
 from akli.live.state import Phase, SpeakingState
-from akli.memory.store import MemoryStore
-from akli.memory.extract import extract_facts_async
+from akli.memory.store import MemoryStore, RecentStore
+from akli.memory.transcript import Transcript
 from akli.tools.registry import Router
 from akli.utils.log import get_logger
 
@@ -57,6 +57,7 @@ class LiveSession:
         state:   SpeakingState,
         router:  Router,
         memory:  MemoryStore,
+        recent:  RecentStore,
         ui_log:  Callable[[str], None],
     ) -> None:
         self._config = config
@@ -79,12 +80,13 @@ class LiveSession:
 
         self._in_buf:  list[str] = []
         self._out_buf: list[str] = []
-        # Накопитель всех реплик ассистента за сессию. На выходе
-        # (shutdown / уход в reconnect-loop exit) дёргаем memory.extract
-        # ОДИН раз и режем дневной лимит free-tier в 20 запросов до
-        # практически нуля. Промежуточные turn-complete'ы только
-        # добавляют сюда строки — вызовов экстрактора нет.
-        self._memory_corpus: list[str] = []
+        # Транскрипт сессии: append-only файл state/dialogs/<ts>.txt.
+        # Сюда пишем каждую реплику ассистента в момент turn-complete.
+        # Обработка (summary + extract) — фоновой задачей на старте
+        # СЛЕДУЮЩЕГО запуска. Если апп упадёт — на следующем запуске файл
+        # найдётся (нет сиблинга .done) и обработается.
+        self._recent = recent
+        self._transcript = Transcript()
 
     # ───────────────────────────── публичный API ──
 
@@ -115,6 +117,7 @@ class LiveSession:
                 turn_complete=True,
             )
             self._ui_log(f"You: {text}")
+            self._transcript.append_user(text)
             self._state.go_thinking()
         except Exception as e:
             _log.warn("text send failed: %s", e)
@@ -211,11 +214,17 @@ class LiveSession:
         now = datetime.now()
         prompt = load_prompt()
         memory_section = self._memory.format_for_prompt()
+        # Скользящее окно из последних N session-summary — даёт модели
+        # «о чём говорили на прошлой неделе», без выдачи всего сырого
+        # транскрипта. Заполняется фоновой задачей на старте после того,
+        # как extract.summarize_session обработает предыдущие диалоги.
+        recent_section = self._recent.format_for_prompt()
         instructions = (
             f"{prompt}\n\n"
             f"[CURRENT DATE]\n{now.strftime('%A, %d %B %Y, %H:%M')}\n"
             f"[OS]\n{self._config.os_system or 'unknown'}\n"
             f"{memory_section}"
+            f"{recent_section}"
         )
 
         # Минимальный конфиг: ровно то, что использует Mark37.
@@ -264,22 +273,13 @@ class LiveSession:
             self._player.stop()
             self._player = None
         self._state.go_idle()
-        # Финальная экстракция фактов — один Gemini-вызов на всю
-        # сессию. Если корпус пуст или меньше ~50 символов — нет смысла
-        # тратить квоту, и так ничего полезного не найдётся.
-        await self._extract_corpus()
-
-    async def _extract_corpus(self) -> None:
-        corpus = "\n".join(self._memory_corpus).strip()
-        self._memory_corpus.clear()
-        if len(corpus) < 50:
-            _log.info("memory: corpus слишком короткий (%d chars), skip", len(corpus))
-            return
-        _log.info("memory: финальная экстракция, corpus=%d chars", len(corpus))
+        # Закрываем транскрипт — экстракция уйдёт в следующий запуск
+        # (или в этом же запуске, если startup-обработчик ещё не дошёл
+        # до файла). Сам процессинг никогда не блокирует shutdown.
         try:
-            await self._extract_memory("", corpus[:8000])
+            self._transcript.close()
         except Exception as e:
-            _log.warn("memory final extract failed: %s", e)
+            _log.warn("transcript close failed: %s", e)
 
     # ───────────────────────────── send / recv ──
 
@@ -388,21 +388,8 @@ class LiveSession:
         self._in_buf.clear()
         if model_text:
             self._ui_log(f"Akli: {model_text}")
-            # Копим текст для one-shot экстракции на выходе из сессии.
-            self._memory_corpus.append(model_text)
-
-    async def _extract_memory(self, user_text: str, model_text: str) -> None:
-        try:
-            patch = await extract_facts_async(
-                user_text     = user_text,
-                model_text    = model_text,
-                api_key       = self._config.gemini_api_key,
-            )
-            if patch:
-                self._memory.update(patch)
-                _log.info("memory: +%d categories", len(patch))
-        except Exception as e:
-            _log.warn("memory extract failed: %s", e)
+            # Только запись на диск — никаких LLM-вызовов в hot path.
+            self._transcript.append_assistant(model_text)
 
     async def _handle_tool_calls(self, function_calls: list) -> None:
         responses = []

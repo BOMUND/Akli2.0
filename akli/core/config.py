@@ -40,6 +40,11 @@ STATE_DIR   = BASE_DIR / "state"
 MEMORY_FILE = STATE_DIR / "memory.json"
 REMINDERS_FILE = STATE_DIR / "reminders.json"
 APPCACHE_FILE  = STATE_DIR / "appcache.json"
+# Память: сырые транскрипты сессий (необработанные диалоги) и скользящее
+# окно summary прошлых сессий. Хранится прямо в STATE_DIR, не удаляется
+# никогда — текст по 50 КБ за час разговора, диск выдержит.
+DIALOGS_DIR = STATE_DIR / "dialogs"
+RECENT_FILE = STATE_DIR / "recent.json"
 
 LEGACY_PROMPT_FILE = BASE_DIR / "core" / "prompt.txt"
 LEGACY_MEMORY_FILE = BASE_DIR / "memory" / "long_term.json"

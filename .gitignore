@@ -9,6 +9,8 @@ config/api_keys.json
 state/memory.json
 state/reminders.json
 state/appcache.json
+state/recent.json
+state/dialogs/
 memory/memory.json
 
 # Virtualenvs / IDE
