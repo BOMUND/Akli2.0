@@ -52,6 +52,10 @@ class AppConfig:
     use_openrouter:     bool = False
     openrouter_model:   str  = "google/gemma-3-27b-it:free"
     os_system:          str  = ""   # "windows" | "mac" | "linux"
+    # Модель Gemini Live. Дефолт — «live-2.5-flash-preview» (канонический
+    # id из SDK-доков); «native-audio-preview-12-2025» иногда ловит 1011/1007 после
+    # первого обмена — было больно поймано (#985, #1189 в googleapis).
+    gemini_live_model:  str  = "gemini-live-2.5-flash-preview"
 
     def is_ready(self) -> bool:
         return bool(self.gemini_api_key) and bool(self.os_system)

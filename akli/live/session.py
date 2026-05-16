@@ -36,7 +36,6 @@ from akli.utils.log import get_logger
 
 _log = get_logger("live")
 
-LIVE_MODEL  = "models/gemini-2.5-flash-native-audio-preview-12-2025"
 VOICE_NAME  = "Puck"       # мужской голос Gemini Live
 # Было 32 слота — на VPN очередь забивалась за ~2 сек, потом дропы.
 # 128 слотов × 128 мс = до ~16 сек буфера — достаточно для переживания
@@ -79,6 +78,10 @@ class LiveSession:
 
         self._in_buf:  list[str] = []
         self._out_buf: list[str] = []
+
+        # Хэндл для возобновления сессии без потери контекста после обрыва.
+        # Сервер сам присылает его в ``session_resumption_update``.
+        self._resume_handle: str | None = None
 
     # ───────────────────────────── публичный API ──
 
@@ -181,9 +184,10 @@ class LiveSession:
                 except asyncio.QueueEmpty:
                     break
 
-        async with self._client.aio.live.connect(model=LIVE_MODEL, config=cfg) as session:
+        model_id = self._config.gemini_live_model or "gemini-live-2.5-flash-preview"
+        async with self._client.aio.live.connect(model=model_id, config=cfg) as session:
             self._session = session
-            _log.info("connected: %s, voice=%s", LIVE_MODEL.split("/")[-1], VOICE_NAME)
+            _log.info("connected: %s, voice=%s", model_id, VOICE_NAME)
             self._ui_log("SYS: Akli online.")
 
             # На реконнекте дочекинаем накопленный текст пользователя
@@ -211,7 +215,7 @@ class LiveSession:
             f"{memory_section}"
         )
 
-        return types.LiveConnectConfig(
+        kwargs: dict = dict(
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
@@ -225,7 +229,19 @@ class LiveSession:
             tools=[types.Tool(function_declarations=self._router.declarations())],
             output_audio_transcription=types.AudioTranscriptionConfig(),
             input_audio_transcription=types.AudioTranscriptionConfig(),
+            # Сжимаем контекст на 128k токенах, чтобы не ловить принудительный
+            # разрыв по лимиту сессии — рекомендация из доков «live-api troubleshooting».
+            context_window_compression=types.ContextWindowCompressionConfig(
+                trigger_tokens=25_000,
+                sliding_window=types.SlidingWindow(target_tokens=12_800),
+            ),
         )
+        # Первый коннект — handle пуст, сервер пришлёт свежий. На реконнекте —
+        # подключаемся с предыдущим, чтобы не терять состояние разговора.
+        kwargs["session_resumption"] = types.SessionResumptionConfig(
+            handle=self._resume_handle,
+        )
+        return types.LiveConnectConfig(**kwargs)
 
     # ───────────────────────────── stream lifecycle ──
 
@@ -298,6 +314,12 @@ class LiveSession:
                 if sc.turn_complete:
                     self._state.on_turn_complete()
                     await self._on_turn_complete()
+
+            # Хэндл возобновления сессии — запоминаем, чтобы переконнект был
+            # «прозрачным» и мы не теряли историю разговора.
+            sru = getattr(response, "session_resumption_update", None)
+            if sru is not None and getattr(sru, "resumable", False) and sru.new_handle:
+                self._resume_handle = sru.new_handle
 
             tc = response.tool_call
             if tc is not None and tc.function_calls:

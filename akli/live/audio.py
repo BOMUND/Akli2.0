@@ -34,14 +34,11 @@ CHANNELS:            Final = 1
 # слишком частыми. 8 чанков/сек куда стабильнее.
 CHUNK_FRAMES:        Final = 2048
 
-# Порог RMS, ниже которого фрейм считается «тихим» и не уезжает в сеть.
-# 16-битный PCM, диапазон ±32768; 60 — это примерно −55 dBFS, реальный
-# фоновый шум комнаты обычно ниже. Это **client-side** оптимизация:
-# серверный VAD по-прежнему работает, просто мы не нагружаем VPN
-# гигабайтами тишины.
-SILENCE_RMS_THRESHOLD: Final = 60
-# Сколько подряд «тихих» чанков всё ещё прокидываем после речи —
-# нужно, чтобы серверный VAD корректно поймал конец фразы.
+# Client-side VAD выключен по умолчанию: если порог == 0, отправляем
+# все фреймы. Оказалось, что при RMS-фильтрации серверный VAD ловит
+# «конец фразы» и переходит в режим вывода раньше времени, и дальше может
+# перестать реагировать на новую речь.
+SILENCE_RMS_THRESHOLD: Final = 0
 SILENCE_TAIL_CHUNKS:   Final = 6
 # Сколько секунд между диагностическими логами про микрофон.
 MIC_STATS_INTERVAL_SEC: Final = 5.0
@@ -102,17 +99,18 @@ class MicStream:
         if not self._state.can_send_mic():
             return
         raw = bytes(indata)
-        rms = _rms_i16(raw)
-        if rms < SILENCE_RMS_THRESHOLD:
-            self._silence_streak += 1
-            # Пропускаем только когда уже отправили достаточно «хвоста»
-            # тишины, чтобы серверный VAD понял конец фразы.
-            if self._silence_streak > SILENCE_TAIL_CHUNKS:
-                self.silent += 1
-                self._maybe_log_stats()
-                return
-        else:
-            self._silence_streak = 0
+        # Опциональный client-side VAD. Порог 0 — отключён, всё уезжает в сеть
+        # (серверный VAD сам решит, когда конец фразы).
+        if SILENCE_RMS_THRESHOLD > 0:
+            rms = _rms_i16(raw)
+            if rms < SILENCE_RMS_THRESHOLD:
+                self._silence_streak += 1
+                if self._silence_streak > SILENCE_TAIL_CHUNKS:
+                    self.silent += 1
+                    self._maybe_log_stats()
+                    return
+            else:
+                self._silence_streak = 0
         payload = {
             "data":      raw,
             "mime_type": f"audio/pcm;rate={SEND_SAMPLE_RATE}",
