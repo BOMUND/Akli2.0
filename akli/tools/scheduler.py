@@ -107,7 +107,7 @@ class Scheduler:
                 if dt <= now - timedelta(seconds=5):
                     # пропустили слишком давно — просто выкидываем
                     continue
-                self._schedule_locked(r, dt - now)
+                self._schedule_locked(r, (dt - now).total_seconds())
                 survivors.append(r)
             self._save(survivors)
         return len(survivors)

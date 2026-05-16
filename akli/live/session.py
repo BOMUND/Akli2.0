@@ -167,6 +167,14 @@ class LiveSession:
         self._ensure_streams()
         if self._player is not None:
             self._player.flush()
+        # Дочистить старые микро-фреймы, которые могли натолкаться в send-очередь
+        # между падением сокета и пересозданием сессии (часть фикса B7).
+        if self._send_q is not None:
+            while not self._send_q.empty():
+                try:
+                    self._send_q.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
 
         async with self._client.aio.live.connect(model=LIVE_MODEL, config=cfg) as session:
             self._session = session
