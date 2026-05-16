@@ -79,11 +79,12 @@ class LiveSession:
 
         self._in_buf:  list[str] = []
         self._out_buf: list[str] = []
-        # Дросселирование memory.extract: free-tier лимит 20 запросов
-        # в день, без троттла он сжирается за 5 минут разговора и
-        # начинает спамить 429 в лог. Реальная польза — раз в минуту-две
-        # достаточно, дальше извлекать всё равно нечего.
-        self._memory_last_at: float = 0.0
+        # Накопитель всех реплик ассистента за сессию. На выходе
+        # (shutdown / уход в reconnect-loop exit) дёргаем memory.extract
+        # ОДИН раз и режем дневной лимит free-tier в 20 запросов до
+        # практически нуля. Промежуточные turn-complete'ы только
+        # добавляют сюда строки — вызовов экстрактора нет.
+        self._memory_corpus: list[str] = []
 
     # ───────────────────────────── публичный API ──
 
@@ -263,6 +264,22 @@ class LiveSession:
             self._player.stop()
             self._player = None
         self._state.go_idle()
+        # Финальная экстракция фактов — один Gemini-вызов на всю
+        # сессию. Если корпус пуст или меньше ~50 символов — нет смысла
+        # тратить квоту, и так ничего полезного не найдётся.
+        await self._extract_corpus()
+
+    async def _extract_corpus(self) -> None:
+        corpus = "\n".join(self._memory_corpus).strip()
+        self._memory_corpus.clear()
+        if len(corpus) < 50:
+            _log.info("memory: corpus слишком короткий (%d chars), skip", len(corpus))
+            return
+        _log.info("memory: финальная экстракция, corpus=%d chars", len(corpus))
+        try:
+            await self._extract_memory("", corpus[:8000])
+        except Exception as e:
+            _log.warn("memory final extract failed: %s", e)
 
     # ───────────────────────────── send / recv ──
 
@@ -371,14 +388,8 @@ class LiveSession:
         self._in_buf.clear()
         if model_text:
             self._ui_log(f"Akli: {model_text}")
-        # Throttle: не чаще одного запроса в 90 сек. На free-tier
-        # ровно 20 запросов/сутки, и при активном разговоре они
-        # сгорают за минуту. 90 сек — компромисс «не теряем важные
-        # факты и не упираемся в квоту».
-        now = time.monotonic()
-        if len(model_text) >= 10 and (now - self._memory_last_at) >= 90.0:
-            self._memory_last_at = now
-            asyncio.create_task(self._extract_memory("", model_text))
+            # Копим текст для one-shot экстракции на выходе из сессии.
+            self._memory_corpus.append(model_text)
 
     async def _extract_memory(self, user_text: str, model_text: str) -> None:
         try:
