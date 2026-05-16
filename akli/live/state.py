@@ -9,9 +9,9 @@
 Раньше каждый из этих сигналов независимо дёргал общий флаг — отсюда
 гонка. Здесь сигнал об окончании ответа централизован.
 
-Дополнительно поднимаем вотчдог: если SPEAKING висит >10 сек без
-новых чанков — принудительно гасим. Если TOOL не получает heartbeat
-60 сек — отменяем asyncio-таск.
+Дополнительно поднимаем вотчдог: если SPEAKING долго не получает вообще
+никакого аудио-прогресса — принудительно гасим. Если TOOL не получает
+heartbeat 60 сек — отменяем asyncio-таск.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from akli.utils.log import get_logger
 
 _log = get_logger("state")
 
-SPEAKING_STUCK_SECONDS  = 10.0
+SPEAKING_STUCK_SECONDS  = 30.0
 THINKING_STUCK_SECONDS  = 12.0
 TOOL_IDLE_SECONDS       = 60.0
 WATCHDOG_INTERVAL       = 0.5
@@ -76,6 +76,7 @@ class SpeakingState:
         self._chunks_in_flight = 0
         self._turn_done = True
         self._last_chunk_at = 0.0
+        self._last_audio_progress_at = 0.0
         self._thinking_started_at = 0.0
 
         self._tool_cancel: asyncio.Event | None = None
@@ -140,6 +141,7 @@ class SpeakingState:
             self._chunks_in_flight = 0
             self._turn_done = True
             self._last_chunk_at = 0.0
+            self._last_audio_progress_at = 0.0
             self._thinking_started_at = 0.0
             self._tool_cancel = None
             self._tool_loop = None
@@ -161,6 +163,7 @@ class SpeakingState:
             self._chunks_in_flight = 0
             self._turn_done = True
             self._last_chunk_at = 0.0
+            self._last_audio_progress_at = 0.0
             self._thinking_started_at = 0.0
             if self._phase in (Phase.THINKING, Phase.SPEAKING):
                 self._switch(Phase.LISTENING)
@@ -202,8 +205,10 @@ class SpeakingState:
     def on_chunk_enqueued(self) -> None:
         """Сервер прислал звуковой чанк — кладём его в плеер."""
         with self._lock:
+            now = time.monotonic()
             self._chunks_in_flight += 1
-            self._last_chunk_at = time.monotonic()
+            self._last_chunk_at = now
+            self._last_audio_progress_at = now
             self._thinking_started_at = 0.0
             self._turn_done = False
             if self._phase in (Phase.LISTENING, Phase.THINKING):
@@ -213,6 +218,7 @@ class SpeakingState:
         """Плеер закончил проигрывание чанка."""
         with self._lock:
             self._chunks_in_flight = max(0, self._chunks_in_flight - 1)
+            self._last_audio_progress_at = time.monotonic()
             self._maybe_finish_speaking_locked()
 
     def on_turn_complete(self) -> None:
@@ -288,6 +294,7 @@ class SpeakingState:
             self._chunks_in_flight = 0
             self._turn_done = True
             self._last_chunk_at = 0.0
+            self._last_audio_progress_at = 0.0
             self._thinking_started_at = 0.0
             player_flush = self._on_player_flush
             if self._phase is not Phase.MUTED:
@@ -334,19 +341,16 @@ class SpeakingState:
                 forced_listening = True
 
             # SPEAKING-страховка
-            elif (self._phase is Phase.SPEAKING and self._last_chunk_at
-                    and now - self._last_chunk_at > SPEAKING_STUCK_SECONDS):
+            elif (self._phase is Phase.SPEAKING and self._last_audio_progress_at
+                    and now - self._last_audio_progress_at > SPEAKING_STUCK_SECONDS):
                 _log.warn(
-                    "watchdog: SPEAKING висит %.1fs без чанков — форс LISTENING",
-                    now - self._last_chunk_at,
+                    "watchdog: SPEAKING без аудио-прогресса %.1fs — форс LISTENING",
+                    now - self._last_audio_progress_at,
                 )
                 self._chunks_in_flight = 0
                 self._turn_done = True
                 self._switch(Phase.LISTENING)
                 forced_listening = True
-                # Плеер мог продолжать выдавать застрявшие чанки в
-                # фоне (например после потери interrupted-сигнала).
-                # Сбрасываем очередь снаружи лока.
                 player_flush = self._on_player_flush
 
             # Грейс хвоста уже мог истечь

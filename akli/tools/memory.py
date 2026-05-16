@@ -14,8 +14,7 @@ KEY_CHARS = re.compile(r"[^\wа-яА-ЯёЁ.-]+", re.UNICODE)
 
 async def _list_summaries(params: dict, ctx: ToolContext) -> str:
     query = str(params.get("query") or "").strip()
-    limit = int(params.get("limit") or 10)
-    items = DialogSummaryStore().list(query=query, limit=limit)
+    items = DialogSummaryStore().list(query=query, limit=0)
     if not items:
         return "No dialog summaries found."
     lines = []
@@ -65,7 +64,6 @@ SPECS: list[ToolSpec] = [
         "List saved dialog summary files by date/title. Use this when old conversation context may help.",
         {
             "query": {"type": "string", "description": "Optional keyword to filter summaries."},
-            "limit": {"type": "integer", "description": "Maximum number of summaries to return."},
         },
         _list_summaries,
     ),

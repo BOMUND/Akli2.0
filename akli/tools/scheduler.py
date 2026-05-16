@@ -183,13 +183,37 @@ def _default_notify(r: Reminder) -> None:
             import winsound
             winsound.Beep(880, 200)
             winsound.Beep(660, 250)
-        except Exception:
-            pass
+        except Exception as e:
+            _log.debug("winsound reminder beep failed: %s", e)
+        toast_sent = False
         try:
             from win10toast import ToastNotifier  # type: ignore
             ToastNotifier().show_toast("Akli", msg, duration=8, threaded=True)
-        except Exception:
-            pass
+            toast_sent = True
+        except Exception as e:
+            _log.debug("win10toast reminder failed: %s", e)
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(0, msg, "Akli reminder", 0x40 | 0x1000)
+            return
+        except Exception as e:
+            if toast_sent:
+                return
+            _log.warn("Windows reminder popup failed: %s", e)
+    elif sys.platform == "darwin":
+        try:
+            import subprocess
+            subprocess.Popen(["osascript", "-e", f'display notification "{msg}" with title "Akli"'])
+            return
+        except Exception as e:
+            _log.debug("macOS notification failed: %s", e)
+    else:
+        try:
+            import subprocess
+            subprocess.Popen(["notify-send", "Akli", msg])
+            return
+        except Exception as e:
+            _log.debug("notify-send failed: %s", e)
 
 
 # ─────────────────────────── tool spec ──

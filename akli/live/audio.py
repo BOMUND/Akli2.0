@@ -36,16 +36,13 @@ CHANNELS:            Final = 1
 # другом месте (см. фикс recv-loop). Возвращаемся к 1024.
 CHUNK_FRAMES:        Final = 1024
 
-# Echo-gate: пока модель говорит, считаем «фон» (RMS последних 0.5 с
-# тишины). Если текущий чанк громче фона + EHO_GATE_DB — пользователь
-# реально заговорил, и мы отдаём аудио серверу (его VAD сам прервёт
-# модель). Иначе — дропаем, чтобы не получить эхо от динамиков.
-ECHO_GATE_DB:        Final = 0.0    # Любой голос не тише фона пропускаем.
-                                    # Жёсткий порог гасил бардж-ин: при
-                                    # громких динамиках пользователь не
-                                    # пробивал baseline и Gemini не слышал
-                                    # начало перебивания.
-ECHO_BASELINE_HALF:  Final = 0.5    # сек, окно для расчёта фона
+# Echo-gate: пока модель говорит, оцениваем уровень утечки динамиков
+# в микрофон. В Gemini отправляется только сигнал, который заметно выше
+# этой утечки; всё остальное считается эхом и дропается.
+ECHO_GATE_DB:        Final = 14.0   # пользователь должен быть сильно громче эха
+ECHO_VOICE_FLOOR:    Final = 350.0  # защита от пропуска тихого шума/хвостов TTS
+ECHO_BASELINE_HALF:  Final = 0.8    # сек, окно для расчёта фона
+ECHO_CONFIRM_CHUNKS: Final = 3      # короткие всплески динамиков не считаем голосом
 # Сколько секунд между диагностическими логами про микрофон.
 MIC_STATS_INTERVAL_SEC: Final = 5.0
 
@@ -107,13 +104,12 @@ class MicStream:
         self._last_stats_at  = 0.0
 
         # Скользящий baseline RMS — используем только пока модель говорит,
-        # чтобы отличить «эхо динамиков» от настоящего голоса. Считаем
-        # экспоненциальное среднее по полусекундному окну и берём *самый
-        # тихий* участок как baseline.
+        # чтобы отличить «эхо динамиков» от настоящего голоса.
         chunks_per_sec = SEND_SAMPLE_RATE / max(CHUNK_FRAMES, 1)
         self._baseline_window = max(int(chunks_per_sec * ECHO_BASELINE_HALF), 4)
         self._baseline_buf: list[float] = []
         self._baseline_rms: float = 0.0
+        self._voice_candidate_chunks = 0
 
     # sounddevice вызывает это из аудио-потока
     def _on_audio(self, indata, frames, time_info, status):  # noqa: ARG002
@@ -132,13 +128,15 @@ class MicStream:
 
         if phase is Phase.SPEAKING:
             # Во время речи модели применяем echo-gate. Baseline — это
-            # фоновый шум комнаты + динамика. Голос пользователя обычно
-            # минимум +12 dB над этим фоном.
+            # фоновый шум комнаты + динамика. Настоящий перебив должен
+            # держаться несколько аудио-чанков, а не быть одним пиком TTS.
             self._update_baseline(rms)
-            if not self._is_voice_above_baseline(rms):
+            if not self._is_confirmed_voice_above_baseline(rms):
                 self.silent += 1
                 self._maybe_log_stats()
                 return
+        else:
+            self._voice_candidate_chunks = 0
 
         payload = {
             "data":      raw,
@@ -151,18 +149,23 @@ class MicStream:
         buf.append(rms)
         if len(buf) > self._baseline_window:
             buf.pop(0)
-        # Baseline = минимум по окну. Тихий конец слова и обычный фон
-        # дают примерно одинаковое значение, и это и есть точка отсчёта.
         if buf:
-            self._baseline_rms = min(buf)
+            ordered = sorted(buf)
+            self._baseline_rms = ordered[min(len(ordered) - 1, len(ordered) // 2)]
 
-    def _is_voice_above_baseline(self, rms: float) -> bool:
-        # Защита от деления: если baseline ≈ 0, считаем фон неинформативным
-        # и сразу пускаем чанк (серверный VAD разберётся).
+    def _is_confirmed_voice_above_baseline(self, rms: float) -> bool:
+        if rms < ECHO_VOICE_FLOOR:
+            self._voice_candidate_chunks = 0
+            return False
         if self._baseline_rms < 1.0:
-            return True
+            self._voice_candidate_chunks += 1
+            return self._voice_candidate_chunks >= ECHO_CONFIRM_CHUNKS
         ratio_db = 20.0 * _log10_safe(rms / self._baseline_rms)
-        return ratio_db >= ECHO_GATE_DB
+        if ratio_db < ECHO_GATE_DB:
+            self._voice_candidate_chunks = 0
+            return False
+        self._voice_candidate_chunks += 1
+        return self._voice_candidate_chunks >= ECHO_CONFIRM_CHUNKS
 
     def _enqueue(self, payload: dict) -> None:
         try:

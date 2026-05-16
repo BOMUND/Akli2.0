@@ -98,13 +98,13 @@ async def analyze_session_memory(
         return {}
 
     text = ""
-    if openrouter_key:
+    if gemini_api_key:
+        text = await asyncio.to_thread(_gemini_call, SESSION_MEMORY_PROMPT, body, gemini_api_key)
+    if not text and openrouter_key:
         text = await asyncio.to_thread(
             _openrouter_call, SESSION_MEMORY_PROMPT, body,
             api_key=openrouter_key, model=openrouter_model,
         )
-    if not text and gemini_api_key:
-        text = await asyncio.to_thread(_gemini_call, SESSION_MEMORY_PROMPT, body, gemini_api_key)
 
     text = _strip_code_fence(text)
     if not text:

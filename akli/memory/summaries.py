@@ -40,8 +40,11 @@ class DialogSummaryStore:
         summary = (summary or "").strip()
         if len(summary) < 20:
             return None
+        existing = self.find_by_source(source)
+        if existing is not None:
+            return existing
         title = _clean_title(title) or _derive_title(summary)
-        ts = datetime.now().strftime("%Y-%m-%d_%H-%M")
+        ts = _source_time_prefix(source) or datetime.now().strftime("%Y-%m-%d_%H-%M")
         stem = f"{ts}_{_slug(title)}"
         path = self._dir / f"{stem}.md"
         suffix = 2
@@ -53,7 +56,20 @@ class DialogSummaryStore:
         _log.info("dialog summary saved: %s", path.name)
         return path
 
-    def list(self, *, query: str = "", limit: int = 10) -> list[SummaryInfo]:
+    def find_by_source(self, source: str) -> Path | None:
+        safe_source = Path(source).name if source else ""
+        if not safe_source:
+            return None
+        marker = f"Source: {safe_source}"
+        for path in self._dir.glob("*.md"):
+            try:
+                if marker in path.read_text(encoding="utf-8"):
+                    return path
+            except Exception:
+                continue
+        return None
+
+    def list(self, *, query: str = "", limit: int = 0) -> list[SummaryInfo]:
         query_norm = query.strip().casefold()
         paths = sorted(
             self._dir.glob("*.md"),
@@ -76,7 +92,7 @@ class DialogSummaryStore:
                 modified=datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds"),
                 size=path.stat().st_size,
             ))
-            if len(items) >= max(1, min(limit, 50)):
+            if limit > 0 and len(items) >= min(limit, 200):
                 break
         return items
 
@@ -125,6 +141,13 @@ def _slug(title: str) -> str:
     slug = SPACE_CHARS.sub("-", slug)
     slug = re.sub(r"-+", "-", slug).strip("-._ ")
     return slug[:60] or "dialog"
+
+
+def _source_time_prefix(source: str) -> str:
+    match = re.match(r"^(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})", Path(source).name)
+    if not match:
+        return ""
+    return f"{match.group(1)}_{match.group(2)}-{match.group(3)}"
 
 
 def _atomic_write(path: Path, text: str) -> None:

@@ -454,17 +454,18 @@ class LiveSession:
                 if tc is not None and tc.function_calls:
                     await self._handle_tool_calls(tc.function_calls)
 
-    def _finalize_user_transcript(self) -> None:
+    def _finalize_user_transcript(self, *, mark_thinking: bool = True) -> None:
         user_text = "".join(self._in_buf).strip()
         self._in_buf.clear()
         if not user_text:
             return
         self._ui_log(f"You: {user_text}")
         self._transcript.append_user(user_text)
-        self._state.go_thinking()
+        if mark_thinking:
+            self._state.go_thinking()
 
     async def _on_turn_complete(self) -> None:
-        self._finalize_user_transcript()
+        self._finalize_user_transcript(mark_thinking=False)
         model_text = "".join(self._out_buf).strip()
         self._out_buf.clear()
         self._out_has_transcription = False
