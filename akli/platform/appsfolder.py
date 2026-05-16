@@ -18,7 +18,7 @@ import sys
 import time
 from pathlib import Path
 
-from akli.config import APPCACHE_FILE
+from akli.core.config import APPCACHE_FILE
 from akli.utils.log import get_logger
 
 _log = get_logger("appsfolder")

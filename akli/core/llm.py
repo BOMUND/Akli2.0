@@ -16,7 +16,7 @@ from typing import Protocol
 
 import requests
 
-from akli.config import AppConfig
+from akli.core.config import AppConfig
 from akli.utils.log import get_logger
 
 _log = get_logger("llm")

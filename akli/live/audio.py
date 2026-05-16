@@ -28,18 +28,20 @@ _log = get_logger("audio")
 SEND_SAMPLE_RATE:    Final = 16000
 RECEIVE_SAMPLE_RATE: Final = 24000
 CHANNELS:            Final = 1
-# Размер микрофонного блока. 2048 фреймов = 128 мс. Раньше было 1024,
-# но на медленных каналах (VPN) серверный keepalive ловил таймаут от
-# переполнения исходящего буфера, потому что ~16 чанков/сек оказывались
-# слишком частыми. 8 чанков/сек куда стабильнее.
-CHUNK_FRAMES:        Final = 2048
+# Размер микрофонного блока. 1024 фреймов = 64 мс. Mark37 и оригинальный
+# `live-api`-туториал Google используют 1024 — на этом значении латентность
+# на «нормальном» канале минимальна. На медленном канале была идея
+# уплотнить чанки до 2048 ради меньшего числа send-ов, но это давало
+# +64 мс к латентности **каждого** фрейма, и реальный баг лежал в
+# другом месте (см. фикс recv-loop). Возвращаемся к 1024.
+CHUNK_FRAMES:        Final = 1024
 
-# Client-side VAD выключен по умолчанию: если порог == 0, отправляем
-# все фреймы. Оказалось, что при RMS-фильтрации серверный VAD ловит
-# «конец фразы» и переходит в режим вывода раньше времени, и дальше может
-# перестать реагировать на новую речь.
-SILENCE_RMS_THRESHOLD: Final = 0
-SILENCE_TAIL_CHUNKS:   Final = 6
+# Echo-gate: пока модель говорит, считаем «фон» (RMS последних 0.5 с
+# тишины). Если текущий чанк громче фона + EHO_GATE_DB — пользователь
+# реально заговорил, и мы отдаём аудио серверу (его VAD сам прервёт
+# модель). Иначе — дропаем, чтобы не получить эхо от динамиков.
+ECHO_GATE_DB:        Final = 12.0   # +12 dB над фоном = осознанная речь
+ECHO_BASELINE_HALF:  Final = 0.5    # сек, окно для расчёта фона
 # Сколько секунд между диагностическими логами про микрофон.
 MIC_STATS_INTERVAL_SEC: Final = 5.0
 
@@ -58,6 +60,15 @@ def _rms_i16(raw: bytes) -> float:
         return float(audioop.rms(raw, 2))
     except Exception:
         return 32768.0
+
+
+def _log10_safe(x: float) -> float:
+    """log10 для положительного аргумента; при x≤0 возвращает большое
+    отрицательное (как «тишина»). Дешевле, чем math.log10 + try/except."""
+    if x <= 0:
+        return -10.0
+    import math  # noqa: PLC0415
+    return math.log10(x)
 
 
 class MicStream:
@@ -89,33 +100,65 @@ class MicStream:
         self.sent     = 0
         self.silent   = 0
         self.dropped  = 0
-        self._silence_streak = 0
         self._last_stats_at  = 0.0
+
+        # Скользящий baseline RMS — используем только пока модель говорит,
+        # чтобы отличить «эхо динамиков» от настоящего голоса. Считаем
+        # экспоненциальное среднее по полусекундному окну и берём *самый
+        # тихий* участок как baseline.
+        chunks_per_sec = SEND_SAMPLE_RATE / max(CHUNK_FRAMES, 1)
+        self._baseline_window = max(int(chunks_per_sec * ECHO_BASELINE_HALF), 4)
+        self._baseline_buf: list[float] = []
+        self._baseline_rms: float = 0.0
 
     # sounddevice вызывает это из аудио-потока
     def _on_audio(self, indata, frames, time_info, status):  # noqa: ARG002
         if status:
             _log.debug("mic status: %s", status)
-        if not self._state.can_send_mic():
+
+        # Базовый гейт: фаза должна разрешать в принципе шевелить микро
+        # (то есть не MUTED и не IDLE). SPEAKING тоже разрешён — иначе
+        # пользователь не сможет перебить ответ голосом.
+        phase = self._state.phase
+        if phase in (Phase.IDLE, Phase.MUTED):
             return
+
         raw = bytes(indata)
-        # Опциональный client-side VAD. Порог 0 — отключён, всё уезжает в сеть
-        # (серверный VAD сам решит, когда конец фразы).
-        if SILENCE_RMS_THRESHOLD > 0:
-            rms = _rms_i16(raw)
-            if rms < SILENCE_RMS_THRESHOLD:
-                self._silence_streak += 1
-                if self._silence_streak > SILENCE_TAIL_CHUNKS:
-                    self.silent += 1
-                    self._maybe_log_stats()
-                    return
-            else:
-                self._silence_streak = 0
+        rms = _rms_i16(raw)
+
+        if phase is Phase.SPEAKING:
+            # Во время речи модели применяем echo-gate. Baseline — это
+            # фоновый шум комнаты + динамика. Голос пользователя обычно
+            # минимум +12 dB над этим фоном.
+            self._update_baseline(rms)
+            if not self._is_voice_above_baseline(rms):
+                self.silent += 1
+                self._maybe_log_stats()
+                return
+
         payload = {
             "data":      raw,
             "mime_type": f"audio/pcm;rate={SEND_SAMPLE_RATE}",
         }
         self._loop.call_soon_threadsafe(self._enqueue, payload)
+
+    def _update_baseline(self, rms: float) -> None:
+        buf = self._baseline_buf
+        buf.append(rms)
+        if len(buf) > self._baseline_window:
+            buf.pop(0)
+        # Baseline = минимум по окну. Тихий конец слова и обычный фон
+        # дают примерно одинаковое значение, и это и есть точка отсчёта.
+        if buf:
+            self._baseline_rms = min(buf)
+
+    def _is_voice_above_baseline(self, rms: float) -> bool:
+        # Защита от деления: если baseline ≈ 0, считаем фон неинформативным
+        # и сразу пускаем чанк (серверный VAD разберётся).
+        if self._baseline_rms < 1.0:
+            return True
+        ratio_db = 20.0 * _log10_safe(rms / self._baseline_rms)
+        return ratio_db >= ECHO_GATE_DB
 
     def _enqueue(self, payload: dict) -> None:
         try:
@@ -195,7 +238,11 @@ class PlayerStream:
     def __init__(self, state: SpeakingState, *, device: int | None = None) -> None:
         self._state  = state
         self._device = device
-        self._inbox: _stdqueue.Queue = _stdqueue.Queue(maxsize=256)
+        # Очередь плеера без лимита: модель может прислать ответ
+        # одним всплеском, и нам важно проиграть его целиком, а не дропать
+        # чанки на пол-фразы. RAM-overhead пренебрежим: 30 сек речи —
+        # пара сотен КБ.
+        self._inbox: _stdqueue.Queue = _stdqueue.Queue()
         self._thread: threading.Thread | None = None
         self._stop_flag = threading.Event()
 
@@ -236,11 +283,9 @@ class PlayerStream:
     def enqueue(self, chunk: bytes) -> None:
         if not chunk:
             return
-        try:
-            self._inbox.put_nowait(chunk)
-            self._state.on_chunk_enqueued()
-        except _stdqueue.Full:
-            _log.warn("player queue full, dropping chunk (this should not happen)")
+        # Очередь без лимита — Full сюда не прилетит.
+        self._inbox.put_nowait(chunk)
+        self._state.on_chunk_enqueued()
 
     # ──────────────────────────── рантайм потока ──
 

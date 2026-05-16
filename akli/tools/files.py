@@ -70,6 +70,8 @@ def _normalize(raw: str) -> Path:
 
 async def _run(params: dict, ctx: ToolContext) -> str:
     operation = (params.get("operation") or "").strip().lower()
+    target = params.get("path") or params.get("destination") or "?"
+    ctx.heartbeat(f"files: {operation} {target}")
     return await asyncio.to_thread(_dispatch, operation, params, ctx)
 
 

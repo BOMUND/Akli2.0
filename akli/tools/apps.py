@@ -52,6 +52,7 @@ async def _run(params: dict, ctx: ToolContext) -> str:
     name = (params.get("app_name") or "").strip()
     if not name:
         return "I need an application name to open."
+    ctx.heartbeat(f"open_app: ищу «{name}»")
     return await asyncio.to_thread(_launch, name, ctx)
 
 

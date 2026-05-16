@@ -103,14 +103,17 @@ class SpeakingState:
     def can_send_mic(self) -> bool:
         """Открыт ли микрофон в текущей фазе.
 
-        * LISTENING / THINKING / TOOL → открыт (TOOL — чтобы можно было
-          говорить, пока выполняется поиск; голос **не** отменяет тулзу
-          по умолчанию, см. ``request_stop``).
-        * SPEAKING → закрыт (предотвращает эхо от динамиков).
+        * LISTENING / THINKING / TOOL / SPEAKING → открыт.
+          - SPEAKING: пускаем аудио, чтобы серверный VAD мог поймать
+            «пользователь заговорил» и прервать ответ модели (barge-in).
+            От эхо защищает ``MicStream._on_audio`` через echo-gate.
+          - TOOL: голос не отменяет тулзу (см. ``request_stop``), но мы
+            хотим, чтобы можно было дополнительно сказать ассистенту что-то
+            «пока ищется».
         * MUTED / IDLE → закрыт.
         """
         p = self.phase
-        return p in (Phase.LISTENING, Phase.THINKING, Phase.TOOL)
+        return p in (Phase.LISTENING, Phase.THINKING, Phase.TOOL, Phase.SPEAKING)
 
     # ──────────────────────────────── переходы ──
 

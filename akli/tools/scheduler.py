@@ -23,7 +23,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
-from akli.config import REMINDERS_FILE
+from akli.core.config import REMINDERS_FILE
 from akli.tools.base import ToolContext, make_spec
 from akli.utils.log import get_logger
 from akli.utils.timeparse import TimeParseError, parse as parse_time
@@ -215,6 +215,7 @@ async def _remind(params: dict, ctx: ToolContext) -> str:
     message   = (params.get("message") or "").strip() or "Reminder"
     if not when_text:
         return "I need a time for the reminder."
+    ctx.heartbeat(f"reminder: «{message[:40]}» в «{when_text}»")
     try:
         r = await asyncio.to_thread(get_scheduler().add, when_text, message)
     except TimeParseError as e:

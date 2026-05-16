@@ -21,7 +21,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from akli.config import LEGACY_MEMORY_FILE, MEMORY_FILE
+from akli.core.config import LEGACY_MEMORY_FILE, MEMORY_FILE
 from akli.utils.log import get_logger
 
 _log = get_logger("memory")

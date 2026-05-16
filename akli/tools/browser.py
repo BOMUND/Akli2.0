@@ -116,17 +116,22 @@ async def _run(params: dict, ctx: ToolContext) -> str:
         url = (params.get("url") or "").strip()
         if not url:
             return "I need a URL."
+        ctx.heartbeat(f"browser: открываю {url}")
         return await asyncio.wait_for(browser.goto(url), timeout=20)
     if action == "search":
         query = (params.get("query") or params.get("url") or "").strip()
         if not query:
             return "I need a search query."
+        ctx.heartbeat(f"browser: ищу «{query}»")
         return await asyncio.wait_for(browser.search(query), timeout=20)
     if action in ("get_text", "extract", "read"):
+        ctx.heartbeat("browser: читаю текст страницы")
         return await asyncio.wait_for(browser.get_text(), timeout=20)
     if action == "screenshot":
+        ctx.heartbeat("browser: делаю скриншот")
         return await asyncio.wait_for(browser.screenshot(), timeout=20)
     if action == "close":
+        ctx.heartbeat("browser: закрываю браузер")
         return await asyncio.wait_for(browser.close(), timeout=10)
 
     return f"Unknown action '{action}'. Use goto/search/get_text/screenshot/close."

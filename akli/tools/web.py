@@ -25,6 +25,7 @@ async def _run(params: dict, ctx: ToolContext) -> str:
     if not query:
         return "I need a search query."
 
+    ctx.heartbeat(f"web_search: DuckDuckGo «{query}»")
     try:
         snippets = await asyncio.wait_for(
             asyncio.to_thread(_ddg_search, query),
@@ -32,20 +33,25 @@ async def _run(params: dict, ctx: ToolContext) -> str:
         )
     except asyncio.TimeoutError:
         snippets = []
+        ctx.heartbeat("web_search: DDG timeout, пробую Gemini grounded")
     except Exception as e:
         _log.warn("ddg failed: %s", e)
         snippets = []
+        ctx.heartbeat(f"web_search: DDG ошибка, пробую Gemini grounded")
 
     if snippets:
+        ctx.heartbeat(f"web_search: получил {len(snippets)} результатов")
         return _format(query, snippets)
 
     # Запасной путь — grounded Gemini.
+    ctx.heartbeat("web_search: спрашиваю Gemini с grounded-поиском…")
     try:
         text = await asyncio.wait_for(
             asyncio.to_thread(_gemini_grounded, query, ctx.config.gemini_api_key),
             timeout=20,
         )
         if text:
+            ctx.heartbeat("web_search: Gemini grounded ответил")
             return text
     except asyncio.TimeoutError:
         return "Search timed out — try a different query."

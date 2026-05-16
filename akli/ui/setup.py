@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
-from akli.config import AppConfig
+from akli.core.config import AppConfig
 
 
 class SetupDialog(QDialog):

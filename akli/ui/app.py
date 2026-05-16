@@ -17,7 +17,7 @@ from typing import Optional
 from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
-from akli.config import AppConfig, load, save
+from akli.core.config import AppConfig, load, save
 from akli.live.session import LiveSession
 from akli.live.state import Phase, SpeakingState
 from akli.memory.store import MemoryStore

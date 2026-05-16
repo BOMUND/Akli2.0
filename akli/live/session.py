@@ -21,7 +21,7 @@ from typing import Callable
 from google import genai
 from google.genai import types
 
-from akli.config import AppConfig, load_prompt
+from akli.core.config import AppConfig, load_prompt
 from akli.live.audio import (
     CHUNK_FRAMES,
     MicStream,
@@ -37,9 +37,10 @@ from akli.utils.log import get_logger
 _log = get_logger("live")
 
 VOICE_NAME  = "Puck"       # мужской голос Gemini Live
-# Было 32 слота — на VPN очередь забивалась за ~2 сек, потом дропы.
-# 128 слотов × 128 мс = до ~16 сек буфера — достаточно для переживания
-# временных замедлений, но не вызывает проблемы backpressure.
+# 128 слотов × 64 мс = до ~8 сек буфера. Запас на временные замедления
+# сети, без переразрастания: backpressure при заполнении значит, что
+# либо сеть упала, либо WebSocket в бад-стейте — оба случая мы ловим в
+# ``_send_loop`` через 5-сек таймаут на ``send_realtime_input``.
 SEND_QUEUE  = 128
 BACKOFF_SEQ = (1.0, 2.0, 4.0, 8.0, 16.0, 30.0)
 SHORT_RUN_RESET_SEC = 30.0    # если сессия прожила дольше — сброс backoff
@@ -78,10 +79,6 @@ class LiveSession:
 
         self._in_buf:  list[str] = []
         self._out_buf: list[str] = []
-
-        # Хэндл для возобновления сессии без потери контекста после обрыва.
-        # Сервер сам присылает его в ``session_resumption_update``.
-        self._resume_handle: str | None = None
 
     # ───────────────────────────── публичный API ──
 
@@ -215,7 +212,15 @@ class LiveSession:
             f"{memory_section}"
         )
 
-        kwargs: dict = dict(
+        # Минимальный конфиг: ровно то, что использует Mark37. Отключённые
+        # фичи сознательно отсутствуют:
+        # * input_/output_audio_transcription — каждая добавляет ~0.3–0.7 с
+        #   латентности на ход. Native-audio модель и так шлёт текстовые
+        #   thoughts в `model_turn.parts[].text` — этого достаточно для UI-лога.
+        # * context_window_compression — на 5–10 мин сессии не нужно.
+        # * session_resumption — handshake-нагрузка на каждом ходе, реальное
+        #   восстановление контекста при обрыве у нас всё равно не работает.
+        return types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
@@ -227,21 +232,7 @@ class LiveSession:
                 parts=[types.Part(text=instructions)],
             ),
             tools=[types.Tool(function_declarations=self._router.declarations())],
-            output_audio_transcription=types.AudioTranscriptionConfig(),
-            input_audio_transcription=types.AudioTranscriptionConfig(),
-            # Сжимаем контекст на 128k токенах, чтобы не ловить принудительный
-            # разрыв по лимиту сессии — рекомендация из доков «live-api troubleshooting».
-            context_window_compression=types.ContextWindowCompressionConfig(
-                trigger_tokens=25_000,
-                sliding_window=types.SlidingWindow(target_tokens=12_800),
-            ),
         )
-        # Первый коннект — handle пуст, сервер пришлёт свежий. На реконнекте —
-        # подключаемся с предыдущим, чтобы не терять состояние разговора.
-        kwargs["session_resumption"] = types.SessionResumptionConfig(
-            handle=self._resume_handle,
-        )
-        return types.LiveConnectConfig(**kwargs)
 
     # ───────────────────────────── stream lifecycle ──
 
@@ -322,36 +313,39 @@ class LiveSession:
 
                 sc = response.server_content
                 if sc is not None:
-                    if sc.output_transcription and sc.output_transcription.text:
-                        self._out_buf.append(sc.output_transcription.text)
-                    if sc.input_transcription and sc.input_transcription.text:
-                        self._in_buf.append(sc.input_transcription.text)
+                    # Native-audio модель шлёт текст в model_turn.parts[].text
+                    # как побочный продукт аудио-генерации. Этот текст —
+                    # ровно то, что модель собирается озвучить, и его
+                    # достаточно для UI-лога. Никаких отдельных transcription
+                    # configs не нужно.
+                    mt = sc.model_turn
+                    if mt is not None and mt.parts:
+                        for part in mt.parts:
+                            text = getattr(part, "text", None)
+                            if text:
+                                self._out_buf.append(text)
                     if sc.turn_complete:
                         self._state.on_turn_complete()
                         await self._on_turn_complete()
-
-                # Хэндл возобновления сессии — запоминаем, чтобы переконнект был
-                # «прозрачным» и мы не теряли историю разговора.
-                sru = getattr(response, "session_resumption_update", None)
-                if sru is not None and getattr(sru, "resumable", False) and sru.new_handle:
-                    self._resume_handle = sru.new_handle
 
                 tc = response.tool_call
                 if tc is not None and tc.function_calls:
                     await self._handle_tool_calls(tc.function_calls)
 
     async def _on_turn_complete(self) -> None:
-        user_text = "".join(self._in_buf).strip()
+        # Без отдельных transcription-configs мы видим только текст модели
+        # (он же — то, что она озвучивает). Пользовательскую речь нативно
+        # ни одна Live-модель не отдаёт без специального flag-а — а его мы
+        # сознательно убрали ради латентности. Память умеет работать и без
+        # user_text: достаточно того, что сказала модель ассистента.
         model_text = "".join(self._out_buf).strip()
-        self._in_buf.clear()
         self._out_buf.clear()
-        if user_text:
-            self._ui_log(f"You: {user_text}")
+        self._in_buf.clear()
         if model_text:
             self._ui_log(f"Akli: {model_text}")
-        if len(user_text) >= 5 and len(model_text) >= 5:
+        if len(model_text) >= 10:
             # Память — fire-and-forget. Любая ошибка только в лог.
-            asyncio.create_task(self._extract_memory(user_text, model_text))
+            asyncio.create_task(self._extract_memory("", model_text))
 
     async def _extract_memory(self, user_text: str, model_text: str) -> None:
         try:

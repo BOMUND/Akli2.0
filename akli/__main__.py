@@ -1,6 +1,6 @@
 """Точка входа: ``python -m akli``."""
 
-from akli.app import main
+from akli.core.app import main
 
 
 if __name__ == "__main__":

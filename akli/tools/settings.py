@@ -78,6 +78,7 @@ async def _run(params: dict, ctx: ToolContext) -> str:
     action = (params.get("action") or "").strip().lower()
     if not action:
         return "I need an action like volume_up, lock, screenshot."
+    ctx.heartbeat(f"settings: {action}")
     fn = _ACTIONS.get(action)
     if fn is None:
         return f"Unknown action '{action}'. Available: {', '.join(sorted(_ACTIONS))}."

@@ -16,7 +16,7 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Protocol
 
-from akli.config import AppConfig
+from akli.core.config import AppConfig
 from akli.live.state import SpeakingState
 from akli.utils.log import get_logger
 
@@ -30,9 +30,21 @@ class ToolContext:
     log:    Callable[[str], None]   # запись в UI activity-log
     cancel: asyncio.Event           # выставляется при таймауте или ``STOP``
 
-    def heartbeat(self) -> None:
-        """Сбрасывает счётчик idle-таймаута. Звать из долгих операций."""
+    def heartbeat(self, message: str | None = None) -> None:
+        """Сбрасывает счётчик idle-таймаута. Звать из долгих операций.
+
+        Опциональный ``message`` логируется в UI activity-log, чтобы
+        пользователь видел, что именно сейчас делает тулза («ищу X»,
+        «открываю Y», «жду ответа сервера»). Это сильно лучше пустого
+        прогресс-бара на 20-секундной операции.
+        """
         self.state.heartbeat()
+        if message:
+            try:
+                self.log(message)
+            except Exception:
+                # Лог в UI не должен ронять тулзу.
+                pass
 
     def cancelled(self) -> bool:
         return self.cancel.is_set()

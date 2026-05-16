@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from akli.config import AppConfig
+from akli.core.config import AppConfig
 from akli.live.state import SpeakingState
 
 from akli.tools.registry import Router
