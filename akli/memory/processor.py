@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 from akli.memory.extract import extract_facts, summarize_session
 from akli.memory.store import MemoryStore, RecentStore
@@ -21,6 +22,7 @@ from akli.memory.transcript import list_unprocessed, mark_processed, read_transc
 from akli.utils.log import get_logger
 
 _log = get_logger("memory.processor")
+ACTIVE_TRANSCRIPT_GRACE_SEC = 30.0
 
 
 async def process_pending_transcripts(
@@ -42,6 +44,10 @@ async def process_pending_transcripts(
 
     for path in files:
         try:
+            age = time.time() - path.stat().st_mtime
+            if age < ACTIVE_TRANSCRIPT_GRACE_SEC:
+                _log.debug("memory: skip fresh/active transcript %s", path.name)
+                continue
             body = read_transcript(path)
             if len(body.strip()) < 50:
                 # Пустой/короткий — нет смысла дёргать LLM, сразу помечаем done.

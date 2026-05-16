@@ -14,7 +14,7 @@ import asyncio
 import time
 from pathlib import Path
 from typing import Optional
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 
 from akli.tools.base import ToolContext, make_spec
 from akli.utils.log import get_logger
@@ -23,6 +23,16 @@ _log = get_logger("tools.browser")
 
 ACTION_TIMEOUT_MS = 15_000
 SCREENSHOT_DIR = Path.home() / "Pictures" / "Akli"
+
+
+def _normalize_url(url: str) -> str:
+    url = (url or "").strip()
+    if url.startswith("localhost:") or url.startswith("127.0.0.1:"):
+        return "http://" + url
+    parsed = urlparse(url)
+    if parsed.scheme:
+        return url
+    return "https://" + url
 
 
 class _Browser:
@@ -51,8 +61,7 @@ class _Browser:
     async def goto(self, url: str) -> str:
         async with self._lock:
             page = await self._ensure()
-            if not url.startswith(("http://", "https://")):
-                url = "https://" + url
+            url = _normalize_url(url)
             await page.goto(url, wait_until="domcontentloaded")
             return f"Opened {url}"
 
