@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import queue as _stdqueue
 import threading
+import time
 from typing import Final
 
 import sounddevice as sd
@@ -27,7 +28,39 @@ _log = get_logger("audio")
 SEND_SAMPLE_RATE:    Final = 16000
 RECEIVE_SAMPLE_RATE: Final = 24000
 CHANNELS:            Final = 1
-CHUNK_FRAMES:        Final = 1024
+# Размер микрофонного блока. 2048 фреймов = 128 мс. Раньше было 1024,
+# но на медленных каналах (VPN) серверный keepalive ловил таймаут от
+# переполнения исходящего буфера, потому что ~16 чанков/сек оказывались
+# слишком частыми. 8 чанков/сек куда стабильнее.
+CHUNK_FRAMES:        Final = 2048
+
+# Порог RMS, ниже которого фрейм считается «тихим» и не уезжает в сеть.
+# 16-битный PCM, диапазон ±32768; 60 — это примерно −55 dBFS, реальный
+# фоновый шум комнаты обычно ниже. Это **client-side** оптимизация:
+# серверный VAD по-прежнему работает, просто мы не нагружаем VPN
+# гигабайтами тишины.
+SILENCE_RMS_THRESHOLD: Final = 60
+# Сколько подряд «тихих» чанков всё ещё прокидываем после речи —
+# нужно, чтобы серверный VAD корректно поймал конец фразы.
+SILENCE_TAIL_CHUNKS:   Final = 6
+# Сколько секунд между диагностическими логами про микрофон.
+MIC_STATS_INTERVAL_SEC: Final = 5.0
+
+
+def _rms_i16(raw: bytes) -> float:
+    """Быстрый RMS по 16-битному PCM без numpy.
+
+    ``audioop`` — стандартная либа CPython, идёт со всеми сборками и
+    реализована на C, так что для 128 мс блока работает быстрее, чем
+    numpy. На Python 3.13 модуль перенесён в ``audioop`` deprecated; если
+    его вдруг нет, падать не хочется — возвращаем 32768 (т.е. «не тишина»,
+    чтобы пропустить через сеть и не глушить речь).
+    """
+    try:
+        import audioop  # noqa: PLC0415
+        return float(audioop.rms(raw, 2))
+    except Exception:
+        return 32768.0
 
 
 class MicStream:
@@ -56,7 +89,11 @@ class MicStream:
         self._loop   = loop
         self._device = device
         self._stream: sd.RawInputStream | None = None
-        self.dropped = 0
+        self.sent     = 0
+        self.silent   = 0
+        self.dropped  = 0
+        self._silence_streak = 0
+        self._last_stats_at  = 0.0
 
     # sounddevice вызывает это из аудио-потока
     def _on_audio(self, indata, frames, time_info, status):  # noqa: ARG002
@@ -64,10 +101,20 @@ class MicStream:
             _log.debug("mic status: %s", status)
         if not self._state.can_send_mic():
             return
-        # bytes(indata) — копия буфера. Без копии sounddevice переиспользует
-        # буфер и мы рискуем отправить мусор.
+        raw = bytes(indata)
+        rms = _rms_i16(raw)
+        if rms < SILENCE_RMS_THRESHOLD:
+            self._silence_streak += 1
+            # Пропускаем только когда уже отправили достаточно «хвоста»
+            # тишины, чтобы серверный VAD понял конец фразы.
+            if self._silence_streak > SILENCE_TAIL_CHUNKS:
+                self.silent += 1
+                self._maybe_log_stats()
+                return
+        else:
+            self._silence_streak = 0
         payload = {
-            "data":      bytes(indata),
+            "data":      raw,
             "mime_type": f"audio/pcm;rate={SEND_SAMPLE_RATE}",
         }
         self._loop.call_soon_threadsafe(self._enqueue, payload)
@@ -75,10 +122,37 @@ class MicStream:
     def _enqueue(self, payload: dict) -> None:
         try:
             self._q.put_nowait(payload)
+            self.sent += 1
         except asyncio.QueueFull:
+            # Очередь забилась — выкидываем самый старый чанк и пихаем
+            # свежий. Терять текущую речь хуже, чем терять секундной
+            # давности молчание.
+            try:
+                self._q.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            try:
+                self._q.put_nowait(payload)
+                self.sent += 1
+            except asyncio.QueueFull:
+                pass
             self.dropped += 1
             if self.dropped % 50 == 0:
-                _log.warn("mic queue full, dropped %d frames cumulative", self.dropped)
+                _log.warn(
+                    "mic queue full, dropped %d frames cumulative (queue=%d/%d)",
+                    self.dropped, self._q.qsize(), self._q.maxsize,
+                )
+        self._maybe_log_stats()
+
+    def _maybe_log_stats(self) -> None:
+        now = time.monotonic()
+        if now - self._last_stats_at < MIC_STATS_INTERVAL_SEC:
+            return
+        self._last_stats_at = now
+        _log.debug(
+            "mic stats: sent=%d silent=%d dropped=%d qsize=%d",
+            self.sent, self.silent, self.dropped, self._q.qsize(),
+        )
 
     def start(self) -> None:
         if self._stream is not None:
@@ -104,7 +178,10 @@ class MicStream:
             s.close()
         except Exception as e:
             _log.warn("mic stop error: %s", e)
-        _log.info("mic stream stopped (dropped frames: %d)", self.dropped)
+        _log.info(
+            "mic stream stopped (sent=%d silent=%d dropped=%d)",
+            self.sent, self.silent, self.dropped,
+        )
 
 
 class PlayerStream:

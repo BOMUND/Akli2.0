@@ -38,9 +38,14 @@ _log = get_logger("live")
 
 LIVE_MODEL  = "models/gemini-2.5-flash-native-audio-preview-12-2025"
 VOICE_NAME  = "Puck"       # мужской голос Gemini Live
-SEND_QUEUE  = 32
+# Было 32 слота — на VPN очередь забивалась за ~2 сек, потом дропы.
+# 128 слотов × 128 мс = до ~16 сек буфера — достаточно для переживания
+# временных замедлений, но не вызывает проблемы backpressure.
+SEND_QUEUE  = 128
 BACKOFF_SEQ = (1.0, 2.0, 4.0, 8.0, 16.0, 30.0)
 SHORT_RUN_RESET_SEC = 30.0    # если сессия прожила дольше — сброс backoff
+# Как часто логируем сводку по сессии. Нужно видеть, живы ли циклы.
+SESSION_STATS_INTERVAL = 30.0
 
 
 class LiveSession:
@@ -247,13 +252,31 @@ class LiveSession:
 
     async def _send_loop(self) -> None:
         assert self._send_q is not None and self._session is not None
+        sent = 0
+        last_log = time.monotonic()
         try:
             while True:
                 payload = await self._send_q.get()
                 if payload is None or self._session is None:
                     return
-                await self._session.send_realtime_input(audio=payload)
+                # Страхуемся от повисания на send: если WebSocket в бад-стейте,
+                # бросаем исключение и TaskGroup подымет реконнект быстрее, чем
+                # прилетел бы 20-секундный keepalive с сервера.
+                await asyncio.wait_for(
+                    self._session.send_realtime_input(audio=payload),
+                    timeout=5.0,
+                )
+                sent += 1
+                now = time.monotonic()
+                if now - last_log >= SESSION_STATS_INTERVAL:
+                    _log.debug(
+                        "send loop alive: sent=%d qsize=%d", sent, self._send_q.qsize(),
+                    )
+                    last_log = now
         except asyncio.CancelledError:
+            raise
+        except asyncio.TimeoutError:
+            _log.warn("send loop timeout (>5s on one frame) — переконнект")
             raise
         except Exception as e:
             _log.warn("send loop error: %s", e)
