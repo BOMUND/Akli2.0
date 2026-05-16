@@ -52,10 +52,18 @@ class AppConfig:
     use_openrouter:     bool = False
     openrouter_model:   str  = "google/gemma-3-27b-it:free"
     os_system:          str  = ""   # "windows" | "mac" | "linux"
-    # Модель Gemini Live. Дефолт — «live-2.5-flash-preview» (канонический
-    # id из SDK-доков); «native-audio-preview-12-2025» иногда ловит 1011/1007 после
-    # первого обмена — было больно поймано (#985, #1189 в googleapis).
-    gemini_live_model:  str  = "gemini-live-2.5-flash-preview"
+    # Модель Gemini Live. Дефолт — «2.0-flash-live-001» (стабильный
+    # GA-id для Gemini Developer API на v1beta, поддерживает tools).
+    #
+    # Не путать:
+    # * gemini-live-2.5-flash-preview — отключён Vertex AI (см. livekit/agents#4414);
+    # * gemini-2.5-flash-native-audio-preview-12-2025 — работает, но ловит
+    #   1011 internal error через 30 с (см. googleapis/python-genai#985).
+    #
+    # При желании можно переключиться в config/akli.json на:
+    # * gemini-2.0-flash-live-001 — стабильный
+    # * gemini-2.5-flash-native-audio-preview-12-2025 — новее качество голоса
+    gemini_live_model:  str  = "gemini-2.0-flash-live-001"
 
     def is_ready(self) -> bool:
         return bool(self.gemini_api_key) and bool(self.os_system)
@@ -80,12 +88,25 @@ def _atomic_write(path: Path, data: str) -> None:
         raise
 
 
+# Модели, которые были в предыдущих версиях как дефолт, но больше не работают
+# на v1beta. При загрузке старого конфига эти значения заменяем на дефолт.
+_BROKEN_LIVE_MODELS = {
+    "gemini-live-2.5-flash-preview",        # отключён в dev API
+}
+
+
 def load() -> AppConfig:
     """Читает текущий конфиг. Если его нет — пытается мигрировать со старого."""
     if CONFIG_FILE.exists():
         try:
             raw = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-            return AppConfig(**{k: raw.get(k, v) for k, v in asdict(AppConfig()).items()})
+            cfg = AppConfig(**{k: raw.get(k, v) for k, v in asdict(AppConfig()).items()})
+            if cfg.gemini_live_model in _BROKEN_LIVE_MODELS:
+                _log.info("Модель %s больше не доступна, перехожу на %s",
+                          cfg.gemini_live_model, AppConfig().gemini_live_model)
+                cfg.gemini_live_model = AppConfig().gemini_live_model
+                save(cfg)
+            return cfg
         except Exception as e:
             _log.warn("akli.json повреждён, использую дефолты: %s", e)
 
