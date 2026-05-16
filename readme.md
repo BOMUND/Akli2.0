@@ -11,6 +11,8 @@ python -m playwright install chromium
 
 # Запуск
 python -m akli
+# или совместимый старый запуск
+python main.py
 ```
 
 При первом запуске откроется диалог, который попросит ключ Gemini API.
@@ -21,9 +23,10 @@ python -m akli
 
 ```
 akli/
-├── app.py            — точка входа (Qt + LiveSession)
-├── config.py         — config/akli.json
-├── llm.py            — опц. OpenRouter (text fallback)
+├── core/
+│   ├── app.py        — точка входа (Qt + LiveSession)
+│   ├── config.py     — config/akli.json
+│   └── llm.py        — опц. OpenRouter (text fallback)
 ├── live/             — рантайм Gemini Live
 │   ├── state.py      — фазы (LISTENING / SPEAKING / TOOL / ...) + watchdog
 │   ├── audio.py      — микрофон / плеер

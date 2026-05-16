@@ -21,21 +21,42 @@ from __future__ import annotations
 
 import sys
 import time
-from typing import Iterable
-
-import pyautogui
-
-try:
-    import pyperclip
-    _HAS_CLIP = True
-except ImportError:
-    _HAS_CLIP = False
+from typing import Protocol
 
 from akli.utils.log import get_logger
 
 _log = get_logger("textinput")
 
 _IS_WINDOWS = sys.platform.startswith("win")
+
+
+class _PyAutoGui(Protocol):
+    PAUSE: float
+
+    def hotkey(self, *args: str) -> None: ...
+    def press(self, key: str) -> None: ...
+    def typewrite(self, message: str, interval: float = 0.0) -> None: ...
+    def screenshot(self, imageFilename: str) -> None: ...
+
+
+class _Pyperclip(Protocol):
+    def copy(self, text: str) -> None: ...
+    def paste(self) -> str: ...
+
+
+try:
+    import pyautogui as _pyautogui_mod
+    _PYAUTOGUI: _PyAutoGui | None = _pyautogui_mod
+    _PYAUTOGUI_ERROR: BaseException | None = None
+except (Exception, SystemExit) as e:
+    _PYAUTOGUI = None
+    _PYAUTOGUI_ERROR = e
+
+try:
+    import pyperclip as _pyperclip_mod
+    _PYPERCLIP: _Pyperclip | None = _pyperclip_mod
+except ImportError:
+    _PYPERCLIP = None
 
 
 def type_text(text: str, *, clear_first: bool = False) -> None:
@@ -46,38 +67,82 @@ def type_text(text: str, *, clear_first: bool = False) -> None:
         _clear_field()
         time.sleep(0.05)
 
-    if _HAS_CLIP:
-        try:
-            pyperclip.copy(text)
-            time.sleep(0.05)
-            pyautogui.hotkey("ctrl", "v")
-            return
-        except Exception as e:
-            _log.warn("clipboard paste failed: %s", e)
+    if _clipboard_paste(text):
+        return
 
     if _IS_WINDOWS:
         if _send_input_unicode(text):
             return
 
+    gui = _gui()
+    if gui is None:
+        return
+
     # Совсем последний фолбэк — это сработает только для ASCII.
     try:
-        pyautogui.typewrite(text, interval=0.03)
+        gui.typewrite(text, interval=0.03)
     except Exception as e:
         _log.warn("typewrite fallback failed: %s", e)
 
 
+def _clipboard_paste(text: str) -> bool:
+    clip = _PYPERCLIP
+    gui = _gui()
+    if clip is None or gui is None:
+        return False
+    try:
+        clip.copy(text)
+        deadline = time.monotonic() + 0.7
+        while time.monotonic() < deadline:
+            try:
+                if clip.paste() == text:
+                    gui.hotkey("ctrl", "v")
+                    return True
+            except Exception:
+                break
+            time.sleep(0.05)
+        gui.hotkey("ctrl", "v")
+        return True
+    except Exception as e:
+        _log.warn("clipboard paste failed: %s", e)
+        return False
+
+
 def hotkey(*keys: str) -> None:
-    pyautogui.hotkey(*keys)
+    gui = _require_gui()
+    gui.hotkey(*keys)
 
 
 def press(key: str) -> None:
-    pyautogui.press(key)
+    gui = _require_gui()
+    gui.press(key)
+
+
+def screenshot(path: str) -> None:
+    gui = _require_gui()
+    gui.screenshot(path)
 
 
 def _clear_field() -> None:
-    pyautogui.hotkey("ctrl", "a")
+    gui = _gui()
+    if gui is None:
+        return
+    gui.hotkey("ctrl", "a")
     time.sleep(0.03)
-    pyautogui.press("delete")
+    gui.press("delete")
+
+
+def _gui() -> _PyAutoGui | None:
+    if _PYAUTOGUI is None:
+        _log.warn("pyautogui unavailable: %s", _PYAUTOGUI_ERROR)
+    return _PYAUTOGUI
+
+
+def _require_gui() -> _PyAutoGui:
+    gui = _gui()
+    if gui is None:
+        raise RuntimeError(f"pyautogui unavailable: {_PYAUTOGUI_ERROR}")
+    return gui
 
 
 # ────────────────────────────── Win-only низкоуровневый путь ──

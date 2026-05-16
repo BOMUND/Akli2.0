@@ -13,8 +13,8 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Protocol
+from dataclasses import dataclass
+from typing import Awaitable, Callable, Protocol
 
 from akli.core.config import AppConfig
 from akli.live.state import SpeakingState
@@ -60,7 +60,7 @@ class ToolSpec:
 
     name:        str
     description: str
-    schema:      dict[str, Any]   # JSON-schema для function_declaration
+    schema:      dict[str, object]   # JSON-schema для function_declaration
     run:         Callable[[dict, ToolContext], Awaitable[str]]
     response_modality: str = "audio"   # обычно "audio", но stub может быть "silent"
 
@@ -74,7 +74,7 @@ class Tool(Protocol):
 def make_spec(
     name:        str,
     description: str,
-    parameters:  dict[str, Any],
+    parameters:  dict[str, object],
     run:         Callable[[dict, ToolContext], Awaitable[str]],
     *,
     required:    list[str] | None = None,

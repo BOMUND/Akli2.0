@@ -124,7 +124,28 @@ class LiveSession:
 
     def request_stop_tool(self) -> None:
         """Кнопка STOP / явная отмена."""
-        self._state.request_stop()
+        self.request_interrupt()
+
+    def request_interrupt(self) -> bool:
+        """Немедленно остановить текущий ответ/тулзу из UI."""
+        ok = self._state.request_interrupt()
+        if ok:
+            self._out_buf.clear()
+            self._in_buf.clear()
+            if self._loop is not None and self._session is not None:
+                self._loop.call_soon_threadsafe(
+                    lambda: asyncio.create_task(self._close_live_session()),
+                )
+        return ok
+
+    async def _close_live_session(self) -> None:
+        session = self._session
+        if session is None:
+            return
+        try:
+            await session.close()
+        except Exception as e:
+            _log.warn("manual interrupt close failed: %s", e)
 
     def shutdown(self) -> None:
         if self._loop is not None:
@@ -364,11 +385,10 @@ class LiveSession:
                     mt = sc.model_turn
                     if mt is not None and mt.parts:
                         for part in mt.parts:
-                            if getattr(part, "thought", False):
+                            if part.thought:
                                 continue
-                            text = getattr(part, "text", None)
-                            if text:
-                                self._out_buf.append(text)
+                            if part.text:
+                                self._out_buf.append(part.text)
                     if sc.turn_complete:
                         self._state.on_turn_complete()
                         await self._on_turn_complete()

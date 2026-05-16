@@ -1,8 +1,7 @@
 """Главное окно.
 
 Левая колонка — HUD-кружок с фазой. Правая — активити-лог. Снизу — поле
-ввода с кнопкой Send и две action-кнопки: Mute и Stop (последняя
-активна только когда выполняется tool).
+ввода и action-кнопки: Mute и Interrupt.
 
 Никаких сложных layout-overrid-ов; всё через ``QHBoxLayout`` /
 ``QVBoxLayout``. Это вторая попытка — старая версия (1500 строк)
@@ -32,11 +31,11 @@ from akli.ui.theme import color_for_phase, label_for_phase
 
 
 class MainWindow(QMainWindow):
-    """Сигналы наружу — `submit_text`, `toggle_mute`, `request_stop`."""
+    """Сигналы наружу — `submit_text`, `toggle_mute`, `interrupt_clicked`."""
 
-    text_submitted = pyqtSignal(str)
-    mute_toggled   = pyqtSignal()
-    stop_clicked   = pyqtSignal()
+    text_submitted    = pyqtSignal(str)
+    mute_toggled      = pyqtSignal()
+    interrupt_clicked = pyqtSignal()
 
     def __init__(self, state: SpeakingState) -> None:
         super().__init__()
@@ -86,11 +85,11 @@ class MainWindow(QMainWindow):
         self._mute_btn.clicked.connect(self.mute_toggled.emit)
         controls.addWidget(self._mute_btn)
 
-        self._stop_btn = QPushButton("Stop tool")
-        self._stop_btn.setObjectName("stop")
-        self._stop_btn.setEnabled(False)
-        self._stop_btn.clicked.connect(self.stop_clicked.emit)
-        controls.addWidget(self._stop_btn)
+        self._interrupt_btn = QPushButton("Interrupt")
+        self._interrupt_btn.setObjectName("stop")
+        self._interrupt_btn.setEnabled(False)
+        self._interrupt_btn.clicked.connect(self.interrupt_clicked.emit)
+        controls.addWidget(self._interrupt_btn)
 
         v.addLayout(controls)
         return panel
@@ -137,7 +136,7 @@ class MainWindow(QMainWindow):
         ph = self._state.phase
         self._orb.set_phase(ph)
         self._phase_label.setText(label_for_phase(ph))
-        self._stop_btn.setEnabled(ph is Phase.TOOL)
+        self._interrupt_btn.setEnabled(ph in (Phase.THINKING, Phase.SPEAKING, Phase.TOOL))
         self.set_mute_text(ph is Phase.MUTED)
 
     # ───────────────────────────── helpers ──

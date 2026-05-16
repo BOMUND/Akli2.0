@@ -19,14 +19,20 @@ import sys
 import time
 from pathlib import Path
 
-import pyautogui
-
 from akli.platform.appsfolder import AppsFolder
 from akli.tools.base import ToolContext, make_spec
+from akli.utils import textinput
 from akli.utils.log import get_logger
 
 _log = get_logger("tools.apps")
 _apps = AppsFolder()
+
+if sys.platform.startswith("win"):
+    CREATE_NEW_PROCESS_GROUP = subprocess.CREATE_NEW_PROCESS_GROUP
+    DETACHED_PROCESS = subprocess.DETACHED_PROCESS
+else:
+    CREATE_NEW_PROCESS_GROUP = 0
+    DETACHED_PROCESS = 0
 
 # Базовые системные приложения. Имя → исполняемый файл.
 _BUILTINS: dict[str, str] = {
@@ -97,8 +103,7 @@ def _spawn(executable: str) -> bool:
             subprocess.Popen(
                 [executable],
                 shell  = False,
-                creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-                            | getattr(subprocess, "DETACHED_PROCESS", 0),
+                creationflags=CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS,
                 stdout = subprocess.DEVNULL,
                 stderr = subprocess.DEVNULL,
             )
@@ -145,12 +150,11 @@ def _legacy_win_search(name: str) -> str:
         restore = _layout.switch_to_en()
 
     try:
-        pyautogui.PAUSE = 0.1
-        pyautogui.press("win")
+        textinput.press("win")
         time.sleep(0.5)
-        pyautogui.typewrite(name, interval=0.05)
+        textinput.type_text(name)
         time.sleep(0.6)
-        pyautogui.press("enter")
+        textinput.press("enter")
         return f"Opened {name} via Start search."
     except Exception as e:
         return f"Could not open '{name}': {e}"

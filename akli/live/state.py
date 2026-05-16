@@ -268,6 +268,34 @@ class SpeakingState:
         _log.warn("Stop requested for tool: %s", name)
         return True
 
+    def request_interrupt(self) -> bool:
+        """Остановить текущий ответ/размышление/тулзу по кнопке Interrupt."""
+        player_flush: Callable[[], None] | None = None
+        tool_cancel: asyncio.Event | None = None
+        tool_loop: asyncio.AbstractEventLoop | None = None
+        with self._lock:
+            active = self._phase in (Phase.THINKING, Phase.SPEAKING, Phase.TOOL)
+            if not active:
+                return False
+            self._chunks_in_flight = 0
+            self._turn_done = True
+            self._last_chunk_at = 0.0
+            player_flush = self._on_player_flush
+            tool_cancel = self._tool_cancel
+            tool_loop = self._tool_loop
+            if self._phase is not Phase.MUTED:
+                self._switch(Phase.LISTENING)
+
+        if player_flush is not None:
+            try:
+                player_flush()
+            except Exception as e:
+                _log.warn("player flush from interrupt raised: %s", e)
+        if tool_cancel is not None and tool_loop is not None:
+            tool_loop.call_soon_threadsafe(tool_cancel.set)
+        _log.info("manual interrupt requested")
+        return True
+
     # ──────────────────────────────── вотчдог ──
 
     async def watchdog(self, stop: asyncio.Event) -> None:

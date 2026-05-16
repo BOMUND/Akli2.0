@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from typing import Any
+from typing import Callable
 
 from akli.core.config import AppConfig
 from akli.live.state import SpeakingState
@@ -30,7 +30,7 @@ class Router:
         tools:  list[ToolSpec],
         state:  SpeakingState,
         config: AppConfig,
-        log:    callable,
+        log:    Callable[[str], None],
     ) -> None:
         self._tools = {t.name: t for t in tools}
         self._state = state
@@ -125,6 +125,6 @@ async def _maybe_await(value):
     return value
 
 
-def _compact(obj: Any) -> str:
+def _compact(obj: object) -> str:
     s = repr(obj) if not isinstance(obj, str) else obj
     return s[:200].replace("\n", " ")

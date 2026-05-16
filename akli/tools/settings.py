@@ -14,9 +14,8 @@ import sys
 import time
 from typing import Callable
 
-import pyautogui
-
 from akli.tools.base import ToolContext, make_spec
+from akli.utils import textinput
 from akli.utils.log import get_logger
 
 _log = get_logger("tools.settings")
@@ -24,14 +23,14 @@ _log = get_logger("tools.settings")
 
 def _press(*keys: str) -> None:
     if len(keys) == 1:
-        pyautogui.press(keys[0])
+        textinput.press(keys[0])
     else:
-        pyautogui.hotkey(*keys)
+        textinput.hotkey(*keys)
 
 
 def _press_n(key: str, n: int = 1) -> None:
     for _ in range(max(1, min(n, 50))):
-        pyautogui.press(key)
+        textinput.press(key)
         time.sleep(0.04)
 
 
@@ -59,9 +58,9 @@ _ACTIONS: dict[str, Callable[[dict], str]] = {
     "shutdown":      lambda p: (_shutdown("/s") or "Shutting down."),
     "restart":       lambda p: (_shutdown("/r") or "Restarting."),
     "logout":        lambda p: (_shutdown("/l") or "Logging out."),
-    "minimize_all":  lambda p: (pyautogui.hotkey("win", "d") or "Minimized."),
-    "show_desktop":  lambda p: (pyautogui.hotkey("win", "d") or "Desktop shown."),
-    "switch_window": lambda p: (pyautogui.hotkey("alt", "tab") or "Switched window."),
+    "minimize_all":  lambda p: (_press("win", "d") or "Minimized."),
+    "show_desktop":  lambda p: (_press("win", "d") or "Desktop shown."),
+    "switch_window": lambda p: (_press("alt", "tab") or "Switched window."),
 }
 
 
@@ -70,7 +69,7 @@ def _take_screenshot() -> str:
     target = Path.home() / "Pictures" / "Akli"
     target.mkdir(parents=True, exist_ok=True)
     path = target / f"screen_{int(time.time())}.png"
-    pyautogui.screenshot(str(path))
+    textinput.screenshot(str(path))
     return f"Saved screenshot to {path}"
 
 

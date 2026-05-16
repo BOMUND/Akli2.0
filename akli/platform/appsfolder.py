@@ -23,6 +23,7 @@ from akli.utils.log import get_logger
 
 _log = get_logger("appsfolder")
 
+CREATE_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform.startswith("win") else 0
 CACHE_TTL_SEC = 24 * 3600
 PS_CMD = (
     "Get-StartApps | "
@@ -67,7 +68,7 @@ class AppsFolder:
             result = subprocess.run(
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command", PS_CMD],
                 capture_output=True, text=True, timeout=15,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                creationflags=CREATE_NO_WINDOW,
             )
             if result.returncode != 0:
                 _log.warn("Get-StartApps failed: %s", result.stderr.strip())

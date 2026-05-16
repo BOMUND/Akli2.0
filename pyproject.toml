@@ -29,7 +29,7 @@ dependencies = [
 ]
 
 [project.scripts]
-akli = "akli.app:main"
+akli = "akli.core.app:main"
 
 [tool.setuptools.packages.find]
 include = ["akli*"]

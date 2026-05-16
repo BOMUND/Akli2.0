@@ -2,9 +2,9 @@
 
 Package layout::
 
-    akli.app              — точка входа: запуск Qt + LiveSession
-    akli.config           — конфигурация (config/akli.json)
-    akli.llm              — единый интерфейс LLM (Gemini, опц. OpenRouter)
+    akli.core.app         — точка входа: запуск Qt + LiveSession
+    akli.core.config      — конфигурация (config/akli.json)
+    akli.core.llm         — единый интерфейс LLM (Gemini, опц. OpenRouter)
     akli.live.*           — рантайм Gemini Live (state, audio, session)
     akli.tools.*          — инструменты (apps, scheduler, web, files, ...)
     akli.memory.*         — долговременная память

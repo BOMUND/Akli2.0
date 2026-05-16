@@ -26,7 +26,7 @@ _log = get_logger("config")
 
 def _base_dir() -> Path:
     """Корень проекта (либо рядом с exe в frozen-режиме)."""
-    if getattr(sys, "frozen", False):
+    if bool(sys.__dict__.get("frozen", False)):
         return Path(sys.executable).parent
     return Path(__file__).resolve().parent.parent
 

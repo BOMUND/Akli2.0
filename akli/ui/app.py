@@ -65,7 +65,7 @@ class AkliApp:
         self._window = MainWindow(self._state)
         self._window.text_submitted.connect(self._on_text)
         self._window.mute_toggled.connect(self._on_mute)
-        self._window.stop_clicked.connect(self._on_stop)
+        self._window.interrupt_clicked.connect(self._on_interrupt)
         self._window.show()
 
         self._start_session()
@@ -160,11 +160,11 @@ class AkliApp:
             self._window.set_mute_text(muted)
         self._bridge.log_line.emit(f"SYS: {'muted' if muted else 'unmuted'}")
 
-    def _on_stop(self) -> None:
+    def _on_interrupt(self) -> None:
         if self._session is not None:
-            ok = self._state.request_stop()
+            ok = self._session.request_interrupt()
             self._bridge.log_line.emit(
-                "SYS: stop signal sent" if ok else "SYS: nothing running"
+                "SYS: interrupt sent" if ok else "SYS: nothing running"
             )
 
     def _on_log(self, line: str) -> None:
