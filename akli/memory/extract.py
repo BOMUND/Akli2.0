@@ -67,7 +67,14 @@ def extract_facts(user_text: str, model_text: str, api_key: str) -> dict:
             return data
         return {}
     except Exception as e:
-        _log.warn("extract failed: %s", e)
+        msg = str(e)
+        # 429 RESOURCE_EXHAUSTED — упёрлись в free-tier лимит дневных
+        # запросов на gemini-2.5-flash-lite. Это не баг кода, а особенность
+        # квоты; молча скипаем, чтобы не спамить активити-логом.
+        if "RESOURCE_EXHAUSTED" in msg or "429" in msg:
+            _log.debug("extract skipped (quota): %s", msg[:120])
+        else:
+            _log.warn("extract failed: %s", e)
         return {}
 
 

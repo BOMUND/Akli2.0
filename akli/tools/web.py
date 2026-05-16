@@ -62,10 +62,17 @@ async def _run(params: dict, ctx: ToolContext) -> str:
 
 
 def _ddg_search(query: str) -> list[dict]:
+    # Пакет переехал: старое имя ``duckduckgo_search`` устарело,
+    # новое — ``ddgs``. На несвежих установках может быть только
+    # старое — пробуем оба, без шумного warning'а.
+    DDGS = None
     try:
-        from duckduckgo_search import DDGS
+        from ddgs import DDGS  # type: ignore
     except ImportError:
-        return []
+        try:
+            from duckduckgo_search import DDGS  # type: ignore
+        except ImportError:
+            return []
     with DDGS() as ddg:
         return list(ddg.text(query, max_results=DDG_RESULT_LIMIT)) or []
 

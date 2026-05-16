@@ -79,6 +79,11 @@ class LiveSession:
 
         self._in_buf:  list[str] = []
         self._out_buf: list[str] = []
+        # Дросселирование memory.extract: free-tier лимит 20 запросов
+        # в день, без троттла он сжирается за 5 минут разговора и
+        # начинает спамить 429 в лог. Реальная польза — раз в минуту-две
+        # достаточно, дальше извлекать всё равно нечего.
+        self._memory_last_at: float = 0.0
 
     # ───────────────────────────── публичный API ──
 
@@ -212,14 +217,11 @@ class LiveSession:
             f"{memory_section}"
         )
 
-        # Минимальный конфиг: ровно то, что использует Mark37. Отключённые
-        # фичи сознательно отсутствуют:
-        # * input_/output_audio_transcription — каждая добавляет ~0.3–0.7 с
-        #   латентности на ход. Native-audio модель и так шлёт текстовые
-        #   thoughts в `model_turn.parts[].text` — этого достаточно для UI-лога.
-        # * context_window_compression — на 5–10 мин сессии не нужно.
-        # * session_resumption — handshake-нагрузка на каждом ходе, реальное
-        #   восстановление контекста при обрыве у нас всё равно не работает.
+        # Минимальный конфиг: ровно то, что использует Mark37.
+        # Отключаем thinking_config с budget=0: native-audio модель по
+        # умолчанию режет «мысли» перед каждой репликой (chain-of-thought),
+        # это и есть главный источник латентности и фолбэка «зачем-то
+        # формирую план повествования» в Activity-логе.
         return types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
@@ -232,6 +234,10 @@ class LiveSession:
                 parts=[types.Part(text=instructions)],
             ),
             tools=[types.Tool(function_declarations=self._router.declarations())],
+            thinking_config=types.ThinkingConfig(
+                thinking_budget=0,
+                include_thoughts=False,
+            ),
         )
 
     # ───────────────────────────── stream lifecycle ──
@@ -242,6 +248,9 @@ class LiveSession:
         if self._player is None:
             self._player = PlayerStream(self._state)
             self._player.start()
+            # Дать state-watchdog'у доступ к player.flush — он сам решает,
+            # когда нужен flush (interrupt от сервера, форс LISTENING).
+            self._state.set_player_flush(self._player.flush)
         if self._mic is None:
             self._mic = MicStream(self._state, self._send_q, self._loop)  # type: ignore[arg-type]
             self._mic.start()
@@ -313,14 +322,33 @@ class LiveSession:
 
                 sc = response.server_content
                 if sc is not None:
+                    # interrupted=True означает, что сервер сам решил прервать
+                    # генерацию — обычно потому, что услышал пользователя
+                    # (server-side barge-in). Нам нужно:
+                    #  1. Немедленно очистить очередь плеера, иначе он будет
+                    #     доигрывать N секунд старого аудио (главный баг,
+                    #     из-за которого перебивание «не работало»).
+                    #  2. Сбросить фазу на LISTENING без ожидания
+                    #     turn_complete (его при interrupt может не быть).
+                    if sc.interrupted:
+                        _log.info("server interrupted current turn — flushing player")
+                        if self._player is not None:
+                            self._player.flush()
+                        self._state.on_interrupt()
+                        # буферы не сохраняем — модель сама знает, что прервалась
+                        self._out_buf.clear()
+                        self._in_buf.clear()
+                        continue
+
                     # Native-audio модель шлёт текст в model_turn.parts[].text
-                    # как побочный продукт аудио-генерации. Этот текст —
-                    # ровно то, что модель собирается озвучить, и его
-                    # достаточно для UI-лога. Никаких отдельных transcription
-                    # configs не нужно.
+                    # как побочный продукт аудио-генерации. Пропускаем
+                    # «думающие» части (part.thought=True) — они не для
+                    # пользователя, это chain-of-thought reasoning модели.
                     mt = sc.model_turn
                     if mt is not None and mt.parts:
                         for part in mt.parts:
+                            if getattr(part, "thought", False):
+                                continue
                             text = getattr(part, "text", None)
                             if text:
                                 self._out_buf.append(text)
@@ -343,8 +371,13 @@ class LiveSession:
         self._in_buf.clear()
         if model_text:
             self._ui_log(f"Akli: {model_text}")
-        if len(model_text) >= 10:
-            # Память — fire-and-forget. Любая ошибка только в лог.
+        # Throttle: не чаще одного запроса в 90 сек. На free-tier
+        # ровно 20 запросов/сутки, и при активном разговоре они
+        # сгорают за минуту. 90 сек — компромисс «не теряем важные
+        # факты и не упираемся в квоту».
+        now = time.monotonic()
+        if len(model_text) >= 10 and (now - self._memory_last_at) >= 90.0:
+            self._memory_last_at = now
             asyncio.create_task(self._extract_memory("", model_text))
 
     async def _extract_memory(self, user_text: str, model_text: str) -> None:

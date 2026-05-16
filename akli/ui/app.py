@@ -86,6 +86,14 @@ class AkliApp:
     # ───────────────────────────── session ──
 
     def _start_session(self) -> None:
+        # Дёргаем здесь для логов «openrouter активен / выключен» — без
+        # этого вызова модуль llm не импортируется и пользователь не
+        # понимает, делает ли его OpenRouter-ключ хоть что-то.
+        # Сейчас провайдер создаётся, но никем не используется
+        # (планируется как fallback для текстовых тулз в будущем PR).
+        from akli.core.llm import get_provider
+        self._llm = get_provider(self._config)
+
         router = build_router(
             state  = self._state,
             config = self._config,

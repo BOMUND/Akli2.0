@@ -65,6 +65,11 @@ class SpeakingState:
     def __init__(self, on_change: Callable[[Phase], None] | None = None) -> None:
         self._lock = threading.Lock()
         self._phase: Phase = Phase.IDLE
+        # Колбэк «надо немедленно очистить очередь плеера». Ставится
+        # сессией после старта PlayerStream. Зовётся:
+        #  * при сервер-side interrupt (см. on_interrupt);
+        #  * когда watchdog принудительно перевёл SPEAKING → LISTENING.
+        self._on_player_flush: Callable[[], None] = lambda: None
         self._pre_mute_phase: Phase = Phase.LISTENING
 
         self._chunks_in_flight = 0
@@ -140,6 +145,25 @@ class SpeakingState:
             self._tool_name = ""
             if self._phase is not Phase.MUTED:
                 self._switch(Phase.LISTENING)
+
+    def on_interrupt(self) -> None:
+        """Барджин: сервер прислал ``interrupted=True``.
+
+        Сбрасываем счётчик ``chunks_in_flight`` — плеер только что
+        выкинул всю невоспроизведённую очередь, считать их играющими
+        смысла нет. Иначе ``maybe_finish_speaking`` так и не отпустит
+        фазу SPEAKING и watchdog будет ждать 10 сек.
+        """
+        with self._lock:
+            self._chunks_in_flight = 0
+            self._turn_done = True
+            self._last_chunk_at = 0.0
+            if self._phase is Phase.SPEAKING:
+                self._switch(Phase.LISTENING)
+
+    def set_player_flush(self, fn: Callable[[], None]) -> None:
+        """Сессия передаёт сюда ``PlayerStream.flush``."""
+        self._on_player_flush = fn or (lambda: None)
 
     def go_idle(self) -> None:
         with self._lock:
@@ -261,6 +285,7 @@ class SpeakingState:
         forced_listening = False
         tool_cancel: asyncio.Event | None = None
         tool_loop: asyncio.AbstractEventLoop | None = None
+        player_flush: Callable[[], None] | None = None
 
         with self._lock:
             # SPEAKING-страховка
@@ -274,6 +299,10 @@ class SpeakingState:
                 self._turn_done = True
                 self._switch(Phase.LISTENING)
                 forced_listening = True
+                # Плеер мог продолжать выдавать застрявшие чанки в
+                # фоне (например после потери interrupted-сигнала).
+                # Сбрасываем очередь снаружи лока.
+                player_flush = self._on_player_flush
 
             # Грейс хвоста уже мог истечь
             elif (self._phase is Phase.SPEAKING and self._chunks_in_flight == 0
@@ -289,6 +318,12 @@ class SpeakingState:
                 )
                 tool_cancel = self._tool_cancel
                 tool_loop = self._tool_loop
+
+        if player_flush is not None:
+            try:
+                player_flush()
+            except Exception as e:
+                _log.warn("player flush from watchdog raised: %s", e)
 
         if tool_cancel is not None and tool_loop is not None:
             tool_loop.call_soon_threadsafe(tool_cancel.set)

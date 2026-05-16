@@ -8,7 +8,7 @@ psutil
 send2trash
 dateparser
 requests
-duckduckgo-search
+ddgs
 playwright
 
 # Windows-only

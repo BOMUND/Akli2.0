@@ -21,7 +21,7 @@ dependencies = [
     "send2trash",
     "dateparser",
     "requests",
-    "duckduckgo-search",
+    "ddgs",
     "playwright",
     "comtypes; sys_platform == 'win32'",
     "pycaw; sys_platform == 'win32'",

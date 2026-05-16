@@ -57,6 +57,7 @@ class _OpenRouter:
             "X-Title":       "Akli 2.0",
         }
 
+        _log.info("openrouter: chat → %s (~%d chars)", self._model, len(user))
         last_err: Exception | None = None
         for attempt in range(1, OR_RETRIES + 2):
             try:
@@ -64,7 +65,9 @@ class _OpenRouter:
                 if resp.status_code != 200:
                     raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
                 data = resp.json()
-                return data["choices"][0]["message"]["content"].strip()
+                reply = data["choices"][0]["message"]["content"].strip()
+                _log.info("openrouter: chat ✓ ответ %d chars", len(reply))
+                return reply
             except Exception as e:
                 last_err = e
                 _log.warn("openrouter attempt %d failed: %s", attempt, e)
@@ -72,6 +75,15 @@ class _OpenRouter:
 
 
 def get_provider(config: AppConfig) -> LLMProvider:
-    if not config.use_openrouter or not config.openrouter_api_key:
+    if not config.use_openrouter:
+        _log.info("openrouter: выключен (use_openrouter=false)")
         return _Disabled()
+    if not config.openrouter_api_key:
+        _log.warn("openrouter: включён, но ключ пуст — провайдер недоступен")
+        return _Disabled()
+    _log.info(
+        "openrouter: активен, model=%s (используется только как fallback "
+        "в текстовых тулзах; голос идёт через Gemini Live)",
+        config.openrouter_model,
+    )
     return _OpenRouter(config.openrouter_api_key, config.openrouter_model)
