@@ -18,6 +18,7 @@ from typing import Awaitable, Callable, Protocol
 
 from akli.core.config import AppConfig
 from akli.live.state import SpeakingState
+from akli.memory.store import MemoryStore
 from akli.utils.log import get_logger
 
 
@@ -29,6 +30,7 @@ class ToolContext:
     config: AppConfig
     log:    Callable[[str], None]   # запись в UI activity-log
     cancel: asyncio.Event           # выставляется при таймауте или ``STOP``
+    memory: MemoryStore | None = None
 
     def heartbeat(self, message: str | None = None) -> None:
         """Сбрасывает счётчик idle-таймаута. Звать из долгих операций.

@@ -21,7 +21,12 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from akli.core.config import LEGACY_MEMORY_FILE, MEMORY_FILE, RECENT_FILE
+from akli.core.config import (
+    LEGACY_MEMORY_FILE,
+    MEMORY_FILE,
+    RECENT_FILE,
+    STATE_MEMORY_LEGACY_FILE,
+)
 from akli.utils.log import get_logger
 
 _log = get_logger("memory")
@@ -39,15 +44,17 @@ class MemoryStore:
     # ─────────────────────────────────────────
 
     def _load(self) -> None:
-        # Миграция со старого расположения
-        if not self._path.exists() and LEGACY_MEMORY_FILE.exists():
+        # Миграция со старых расположений в state/core_memory.json.
+        for legacy_path in (STATE_MEMORY_LEGACY_FILE, LEGACY_MEMORY_FILE):
+            if self._path.exists() or not legacy_path.exists():
+                continue
             try:
                 self._path.parent.mkdir(parents=True, exist_ok=True)
                 self._path.write_text(
-                    LEGACY_MEMORY_FILE.read_text(encoding="utf-8"),
+                    legacy_path.read_text(encoding="utf-8"),
                     encoding="utf-8",
                 )
-                _log.info("Мигрирован legacy long_term.json → memory.json")
+                _log.info("Мигрирован legacy memory → %s", self._path.name)
             except Exception as e:
                 _log.warn("legacy memory migration failed: %s", e)
 
@@ -86,6 +93,10 @@ class MemoryStore:
         with self._lock:
             return json.loads(json.dumps(self._data, ensure_ascii=False))
 
+    def reload(self) -> None:
+        with self._lock:
+            self._load()
+
     def update(self, patch: dict) -> None:
         """``patch`` имеет ту же структуру, что и data. Сливается deep.
 
@@ -115,7 +126,7 @@ class MemoryStore:
         with self._lock:
             if not self._data:
                 return ""
-            lines = ["[LONG-TERM MEMORY]"]
+            lines = ["[CORE USER MEMORY]"]
             for cat, items in self._data.items():
                 if not items:
                     continue

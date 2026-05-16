@@ -28,6 +28,7 @@ from akli.utils.log import get_logger
 _log = get_logger("state")
 
 SPEAKING_STUCK_SECONDS  = 10.0
+THINKING_STUCK_SECONDS  = 12.0
 TOOL_IDLE_SECONDS       = 60.0
 WATCHDOG_INTERVAL       = 0.5
 SPEAKING_TAIL_GRACE_SEC = 0.3   # сколько ждём «хвоста» перед LISTENING
@@ -75,6 +76,7 @@ class SpeakingState:
         self._chunks_in_flight = 0
         self._turn_done = True
         self._last_chunk_at = 0.0
+        self._thinking_started_at = 0.0
 
         self._tool_cancel: asyncio.Event | None = None
         self._tool_loop: asyncio.AbstractEventLoop | None = None
@@ -138,6 +140,7 @@ class SpeakingState:
             self._chunks_in_flight = 0
             self._turn_done = True
             self._last_chunk_at = 0.0
+            self._thinking_started_at = 0.0
             self._tool_cancel = None
             self._tool_loop = None
             self._tool_started_at = 0.0
@@ -158,7 +161,8 @@ class SpeakingState:
             self._chunks_in_flight = 0
             self._turn_done = True
             self._last_chunk_at = 0.0
-            if self._phase is Phase.SPEAKING:
+            self._thinking_started_at = 0.0
+            if self._phase in (Phase.THINKING, Phase.SPEAKING):
                 self._switch(Phase.LISTENING)
 
     def set_player_flush(self, fn: Callable[[], None]) -> None:
@@ -179,6 +183,7 @@ class SpeakingState:
         with self._lock:
             if self._phase in (Phase.MUTED, Phase.TOOL, Phase.SPEAKING):
                 return
+            self._thinking_started_at = time.monotonic()
             self._switch(Phase.THINKING)
 
     def toggle_mute(self) -> bool:
@@ -199,6 +204,7 @@ class SpeakingState:
         with self._lock:
             self._chunks_in_flight += 1
             self._last_chunk_at = time.monotonic()
+            self._thinking_started_at = 0.0
             self._turn_done = False
             if self._phase in (Phase.LISTENING, Phase.THINKING):
                 self._switch(Phase.SPEAKING)
@@ -212,6 +218,10 @@ class SpeakingState:
     def on_turn_complete(self) -> None:
         with self._lock:
             self._turn_done = True
+            if self._phase is Phase.THINKING:
+                self._thinking_started_at = 0.0
+                self._switch(Phase.LISTENING)
+                return
             self._maybe_finish_speaking_locked()
 
     def _maybe_finish_speaking_locked(self) -> None:
@@ -271,18 +281,15 @@ class SpeakingState:
     def request_interrupt(self) -> bool:
         """Остановить текущий ответ/размышление/тулзу по кнопке Interrupt."""
         player_flush: Callable[[], None] | None = None
-        tool_cancel: asyncio.Event | None = None
-        tool_loop: asyncio.AbstractEventLoop | None = None
         with self._lock:
-            active = self._phase in (Phase.THINKING, Phase.SPEAKING, Phase.TOOL)
+            active = self._phase in (Phase.THINKING, Phase.SPEAKING)
             if not active:
                 return False
             self._chunks_in_flight = 0
             self._turn_done = True
             self._last_chunk_at = 0.0
+            self._thinking_started_at = 0.0
             player_flush = self._on_player_flush
-            tool_cancel = self._tool_cancel
-            tool_loop = self._tool_loop
             if self._phase is not Phase.MUTED:
                 self._switch(Phase.LISTENING)
 
@@ -291,8 +298,6 @@ class SpeakingState:
                 player_flush()
             except Exception as e:
                 _log.warn("player flush from interrupt raised: %s", e)
-        if tool_cancel is not None and tool_loop is not None:
-            tool_loop.call_soon_threadsafe(tool_cancel.set)
         _log.info("manual interrupt requested")
         return True
 
@@ -316,8 +321,20 @@ class SpeakingState:
         player_flush: Callable[[], None] | None = None
 
         with self._lock:
+            # THINKING-страховка: Gemini иногда завершает ход без аудио или
+            # turn_complete теряется в preview Live API. UI не должен висеть.
+            if (self._phase is Phase.THINKING and self._thinking_started_at
+                    and now - self._thinking_started_at > THINKING_STUCK_SECONDS):
+                _log.warn(
+                    "watchdog: THINKING висит %.1fs — форс LISTENING",
+                    now - self._thinking_started_at,
+                )
+                self._thinking_started_at = 0.0
+                self._switch(Phase.LISTENING)
+                forced_listening = True
+
             # SPEAKING-страховка
-            if (self._phase is Phase.SPEAKING and self._last_chunk_at
+            elif (self._phase is Phase.SPEAKING and self._last_chunk_at
                     and now - self._last_chunk_at > SPEAKING_STUCK_SECONDS):
                 _log.warn(
                     "watchdog: SPEAKING висит %.1fs без чанков — форс LISTENING",

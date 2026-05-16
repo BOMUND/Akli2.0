@@ -65,7 +65,9 @@ class AkliApp:
         self._window = MainWindow(self._state)
         self._window.text_submitted.connect(self._on_text)
         self._window.mute_toggled.connect(self._on_mute)
+        self._window.stop_tool_clicked.connect(self._on_stop_tool)
         self._window.interrupt_clicked.connect(self._on_interrupt)
+        self._window.reconnect_clicked.connect(self._on_reconnect)
         self._window.show()
 
         self._start_session()
@@ -100,6 +102,7 @@ class AkliApp:
             state  = self._state,
             config = self._config,
             log    = lambda line: self._bridge.log_line.emit(line),
+            memory = self._memory,
         )
         self._session = LiveSession(
             config = self._config,
@@ -160,11 +163,25 @@ class AkliApp:
             self._window.set_mute_text(muted)
         self._bridge.log_line.emit(f"SYS: {'muted' if muted else 'unmuted'}")
 
+    def _on_stop_tool(self) -> None:
+        if self._session is not None:
+            ok = self._session.request_stop_tool()
+            self._bridge.log_line.emit(
+                "SYS: stop signal sent" if ok else "SYS: no tool running"
+            )
+
     def _on_interrupt(self) -> None:
         if self._session is not None:
             ok = self._session.request_interrupt()
             self._bridge.log_line.emit(
-                "SYS: interrupt sent" if ok else "SYS: nothing running"
+                "SYS: interrupt sent" if ok else "SYS: nothing to interrupt"
+            )
+
+    def _on_reconnect(self) -> None:
+        if self._session is not None:
+            ok = self._session.request_reconnect()
+            self._bridge.log_line.emit(
+                "SYS: reconnect requested" if ok else "SYS: reconnect unavailable"
             )
 
     def _on_log(self, line: str) -> None:

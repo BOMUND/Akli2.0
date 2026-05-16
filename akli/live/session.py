@@ -29,9 +29,8 @@ from akli.live.audio import (
     SEND_SAMPLE_RATE,
 )
 from akli.live.state import Phase, SpeakingState
-from akli.memory.extract import extract_facts
 from akli.memory.store import MemoryStore, RecentStore
-from akli.memory.transcript import Transcript, read_transcript
+from akli.memory.transcript import Transcript
 from akli.tools.registry import Router
 from akli.utils.log import get_logger
 
@@ -47,7 +46,6 @@ BACKOFF_SEQ = (1.0, 2.0, 4.0, 8.0, 16.0, 30.0)
 SHORT_RUN_RESET_SEC = 30.0    # если сессия прожила дольше — сброс backoff
 # Как часто логируем сводку по сессии. Нужно видеть, живы ли циклы.
 SESSION_STATS_INTERVAL = 30.0
-LIVE_MEMORY_DEBOUNCE_SEC = 1.0
 
 
 class LiveSession:
@@ -83,14 +81,11 @@ class LiveSession:
         self._in_buf:  list[str] = []
         self._out_buf: list[str] = []
         self._out_has_transcription = False
-        self._manual_interrupt_requested = False
-        self._memory_task: asyncio.Task | None = None
-        self._memory_dirty = False
-        self._memory_last_chars = 0
+        self._manual_reconnect_requested = False
+        self._ignore_output_until = 0.0
         # Транскрипт сессии: append-only файл state/dialogs/<ts>.txt.
-        # Пишем реплики сразу после финальной транскрипции Live API; факты
-        # извлекаются в фоне в этом же запуске и повторно на следующем старте,
-        # если приложение упало до обработки.
+        # Live path только пишет диалог; summary/core-memory обработка идёт
+        # после закрытия transcript на следующем старте приложения.
         self._recent = recent
         self._transcript = Transcript()
 
@@ -124,22 +119,32 @@ class LiveSession:
             )
             self._ui_log(f"You: {text}")
             self._transcript.append_user(text)
-            self._schedule_memory_update()
             self._state.go_thinking()
         except Exception as e:
             _log.warn("text send failed: %s", e)
 
-    def request_stop_tool(self) -> None:
-        """Кнопка STOP / явная отмена."""
-        self.request_interrupt()
+    def request_stop_tool(self) -> bool:
+        """Отменить только текущую тулзу, не трогая Gemini Live session."""
+        return self._state.request_stop()
 
     def request_interrupt(self) -> bool:
-        """Немедленно остановить текущий ответ/тулзу из UI."""
+        """Мягко остановить текущий ответ без reconnect и потери context."""
         ok = self._state.request_interrupt()
-        active = ok or self._session is not None
+        if not ok:
+            return False
+        self._out_buf.clear()
+        self._out_has_transcription = False
+        self._ignore_output_until = time.monotonic() + 0.5
+        if self._player is not None:
+            self._player.flush()
+        return True
+
+    def request_reconnect(self) -> bool:
+        """Жёстко пересоздать Gemini Live session вручную."""
+        active = self._session is not None
         if not active:
             return False
-        self._manual_interrupt_requested = True
+        self._manual_reconnect_requested = True
         self._out_buf.clear()
         self._in_buf.clear()
         self._out_has_transcription = False
@@ -161,7 +166,7 @@ class LiveSession:
         try:
             await session.close()
         except Exception as e:
-            _log.warn("manual interrupt close failed: %s", e)
+            _log.warn("manual reconnect close failed: %s", e)
 
     def shutdown(self) -> None:
         if self._loop is not None:
@@ -181,8 +186,8 @@ class LiveSession:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                if self._manual_interrupt_requested:
-                    _log.info("manual interrupt closed live session")
+                if self._manual_reconnect_requested:
+                    _log.info("manual reconnect closed live session")
                 else:
                     _log.warn("session crashed: %s", e)
                     self._ui_log(f"SYS: connection lost ({e})")
@@ -190,11 +195,11 @@ class LiveSession:
             if self._stop.is_set():
                 break
 
-            if self._manual_interrupt_requested:
-                self._manual_interrupt_requested = False
+            if self._manual_reconnect_requested:
+                self._manual_reconnect_requested = False
                 backoff_idx = 0
                 delay = 0.2
-                self._ui_log("SYS: interrupted, reconnecting.")
+                self._ui_log("SYS: reconnecting.")
             else:
                 lived = time.monotonic() - connected_at
                 if lived >= SHORT_RUN_RESET_SEC:
@@ -222,7 +227,7 @@ class LiveSession:
             api_key=self._config.gemini_api_key,
         )
 
-        await self._refresh_memory_now("pre-connect")
+        self._memory.reload()
         cfg = self._build_config()
         self._state.reset_for_reconnect()
         self._ensure_streams()
@@ -256,17 +261,14 @@ class LiveSession:
         now = datetime.now()
         prompt = load_prompt()
         memory_section = self._memory.format_for_prompt()
-        # Скользящее окно из последних N session-summary — даёт модели
-        # «о чём говорили на прошлой неделе», без выдачи всего сырого
-        # транскрипта. Заполняется фоновой задачей на старте после того,
-        # как extract.summarize_session обработает предыдущие диалоги.
-        recent_section = self._recent.format_for_prompt()
         instructions = (
             f"{prompt}\n\n"
             f"[CURRENT DATE]\n{now.strftime('%A, %d %B %Y, %H:%M')}\n"
             f"[OS]\n{self._config.os_system or 'unknown'}\n"
-            f"{memory_section}"
-            f"{recent_section}"
+            f"{memory_section}\n"
+            "[DIALOG MEMORY]\n"
+            "Older dialog summaries are available via memory_list_summaries "
+            "and memory_read_summary tools. Use them when past context may help.\n"
         )
 
         # Минимальный конфиг: ровно то, что использует Mark37.
@@ -337,15 +339,7 @@ class LiveSession:
             self._player.stop()
             self._player = None
         self._state.go_idle()
-        # Закрываем транскрипт — экстракция уйдёт в следующий запуск
-        # (или в этом же запуске, если startup-обработчик ещё не дошёл
-        # до файла). Сам процессинг никогда не блокирует shutdown.
-        if self._memory_task is not None and not self._memory_task.done():
-            self._memory_task.cancel()
-            try:
-                await self._memory_task
-            except asyncio.CancelledError:
-                pass
+        # Закрываем транскрипт — summary/core обработка уйдёт в следующий запуск.
         try:
             self._transcript.close()
         except Exception as e:
@@ -403,9 +397,8 @@ class LiveSession:
         assert self._session is not None
         while self._session is not None:
             async for response in self._session.receive():
-                if self._manual_interrupt_requested:
-                    continue
-                if response.data:
+                ignore_output = time.monotonic() < self._ignore_output_until
+                if response.data and not ignore_output:
                     if self._player is not None:
                         self._player.enqueue(response.data)
 
@@ -437,7 +430,7 @@ class LiveSession:
                             self._finalize_user_transcript()
 
                     out_tr = sc.output_transcription
-                    if out_tr is not None:
+                    if out_tr is not None and not ignore_output:
                         if out_tr.text:
                             self._out_has_transcription = True
                             self._out_buf.append(out_tr.text)
@@ -447,7 +440,7 @@ class LiveSession:
                     # «думающие» части (part.thought=True) — они не для
                     # пользователя, это chain-of-thought reasoning модели.
                     mt = sc.model_turn
-                    if mt is not None and mt.parts:
+                    if mt is not None and mt.parts and not ignore_output:
                         for part in mt.parts:
                             if part.thought:
                                 continue
@@ -468,7 +461,6 @@ class LiveSession:
             return
         self._ui_log(f"You: {user_text}")
         self._transcript.append_user(user_text)
-        self._schedule_memory_update()
         self._state.go_thinking()
 
     async def _on_turn_complete(self) -> None:
@@ -479,42 +471,6 @@ class LiveSession:
         if model_text:
             self._ui_log(f"Akli: {model_text}")
             self._transcript.append_assistant(model_text)
-            self._schedule_memory_update()
-
-    def _schedule_memory_update(self) -> None:
-        self._memory_dirty = True
-        if self._memory_task is not None and not self._memory_task.done():
-            return
-        self._memory_task = asyncio.create_task(self._memory_update_loop())
-
-    async def _memory_update_loop(self) -> None:
-        while self._memory_dirty and not self._stop.is_set():
-            self._memory_dirty = False
-            await asyncio.sleep(LIVE_MEMORY_DEBOUNCE_SEC)
-            await self._refresh_memory_now("turn")
-
-    async def _refresh_memory_now(self, reason: str) -> None:
-        if not self._config.gemini_api_key and not (
-            self._config.use_openrouter and self._config.openrouter_api_key
-        ):
-            return
-        body = read_transcript(self._transcript.path)
-        body_len = len(body.strip())
-        if body_len < 50 or body_len <= self._memory_last_chars:
-            return
-        facts = await extract_facts(
-            body,
-            gemini_api_key=self._config.gemini_api_key,
-            openrouter_key=(
-                self._config.openrouter_api_key if self._config.use_openrouter else ""
-            ),
-            openrouter_model=self._config.openrouter_model,
-        )
-        self._memory_last_chars = body_len
-        if facts:
-            self._memory.update(facts)
-            _log.info("memory updated from live transcript (%s): %d categories", reason, len(facts))
-            self._ui_log("SYS: memory updated.")
 
     async def _handle_tool_calls(self, function_calls: list) -> None:
         responses = []

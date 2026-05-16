@@ -18,6 +18,7 @@ from typing import Callable
 
 from akli.core.config import AppConfig
 from akli.live.state import SpeakingState
+from akli.memory.store import MemoryStore
 from akli.tools.base import ToolContext, ToolSpec
 from akli.utils.log import get_logger
 
@@ -31,11 +32,13 @@ class Router:
         state:  SpeakingState,
         config: AppConfig,
         log:    Callable[[str], None],
+        memory: MemoryStore | None = None,
     ) -> None:
         self._tools = {t.name: t for t in tools}
         self._state = state
         self._config = config
         self._log = log
+        self._memory = memory
 
     def declarations(self) -> list[dict]:
         return [
@@ -64,6 +67,7 @@ class Router:
             config = self._config,
             log    = self._log,
             cancel = cancel,
+            memory = self._memory,
         )
         _log.info("→ %s  %s", name, _compact(params))
 
