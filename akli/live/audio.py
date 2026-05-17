@@ -254,11 +254,15 @@ class PlayerStream:
         # дёрнуть ``stream.abort()`` для немедленного обнуления буфера
         # устройства (без него закрытие приложения вешает ~50–500 мс речи).
         self._stream: sd.RawOutputStream | None = None
+        # После ``abort()`` PortAudio возвращает ошибку на каждый ``write``.
+        # Этот флаг даёт ``_run`` понять «уже отменены, не спамить логом».
+        self._aborted = False
 
     def start(self) -> None:
         if self._thread is not None:
             return
         self._stop_flag.clear()
+        self._aborted = False
         self._thread = threading.Thread(
             target = self._run,
             name   = "AkliPlayer",
@@ -285,6 +289,7 @@ class PlayerStream:
         продолжает говорить уже после закрытия окна. ``abort()`` дропает
         device buffer немедленно. Если поток уже закрылся — no-op.
         """
+        self._aborted = True
         s = self._stream
         if s is None:
             return
@@ -354,10 +359,18 @@ class PlayerStream:
                     continue
                 if not chunk:
                     continue
+                if self._aborted:
+                    # Сессия закрывается / шла отмена — буфер устройства уже
+                    # сдропан, любые write вернут ошибку. Просто декрементим
+                    # счётчик чанков (state ждёт on_chunk_drained на каждый
+                    # enqueue) и идём дальше до выхода по _stop_flag.
+                    self._state.on_chunk_drained()
+                    continue
                 try:
                     stream.write(chunk)
                 except Exception as e:
-                    _log.warn("player write failed: %s", e)
+                    if not self._aborted:
+                        _log.warn("player write failed: %s", e)
                 finally:
                     self._state.on_chunk_drained()
         finally:

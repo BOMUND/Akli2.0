@@ -19,7 +19,7 @@ EXTRACT_MODEL = "gemini-2.5-flash-lite"
 SESSION_MEMORY_PROMPT = """Ты — обработчик памяти голосового ассистента.
 Получаешь транскрипт одной завершённой сессии.
 
-Верни строго JSON без markdown:
+Верни строго ровно JSON объект, без пояснений, без markdown, без ```:
 {
   "title": "короткое название диалога 3-8 слов",
   "summary": "полезное краткое summary диалога без мусора",
@@ -36,9 +36,13 @@ SESSION_MEMORY_PROMPT = """Ты — обработчик памяти голос
   факт (например: "запомни", "сохрани в память", "не забудь").
 - Не сохраняй в core_facts случайные команды, временные просьбы, эмоции, шутки,
   обычный ход диалога и факты, которые пользователь НЕ просил запомнить.
-- Если пользователь явно попросил удалить/забыть факт — верни этот ключ с
-  пустым value, например {"notes":{"old_fact":{"value":""}}}.
-- Если сохранять в core_facts нечего — верни пустой объект {}.
+- ДЛЯ УДАЛЕНИЯ ФАКТА: если пользователь явно попросил удалить/забыть факт—
+  верни этот ключ с выбором из этих вариантов:
+    {"notes":{"old_fact":{"value":""}}}             ← пустая строка
+    {"notes":{"old_fact":null}}                       ← null
+  НЕ пиши слово DELETE в value и не оставляй ключ с любым непустым текстом
+  вместо самого факта — он будет сохранён как валидный новый факт.
+- Если сохранять/удалять в core_facts нечего — верни пустой объект {}.
 - Язык title/summary/value — язык пользователя, обычно русский.
 """
 
@@ -86,6 +90,36 @@ def _strip_code_fence(text: str) -> str:
     return text
 
 
+async def _try_provider(
+    call, *, label: str, api_key: str, model: str, body: str,
+) -> dict | None:
+    """Дёрнуть LLM-провайдера и попробовать спарсить JSON.
+
+    Возвращает dict при успехе, ``None`` при любой проблеме (пустой
+    ответ / мусорный JSON / исключение в сети). Вызывающий код решает,
+    пробовать ли следующего провайдера.
+    """
+    if label == "openrouter":
+        text = await asyncio.to_thread(
+            call, SESSION_MEMORY_PROMPT, body,
+            api_key=api_key, model=model,
+        )
+    else:
+        text = await asyncio.to_thread(call, SESSION_MEMORY_PROMPT, body, api_key)
+    text = _strip_code_fence(text)
+    if not text:
+        return None
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        _log.warn("%s analysis: bad json (%s): %s", label, e, text[:300])
+        return None
+    if not isinstance(data, dict):
+        _log.warn("%s analysis: not a json object", label)
+        return None
+    return data
+
+
 async def analyze_session_memory(
     transcript: str,
     *,
@@ -100,24 +134,26 @@ async def analyze_session_memory(
     # OpenRouter — приоритетный провайдер: у Gemini free-tier лимит 20/день,
     # его лучше беречь под голосовую сессию. OpenRouter (gemma:free и т.п.)
     # ходит асинхронно через ``asyncio.to_thread`` и не упирается в ту же
-    # квоту. Если OpenRouter недоступен / квота кончилась — fallback на
-    # Gemini.
-    text = ""
+    # квоту. Если OpenRouter недоступен / квота кончилась / вернул мусорный
+    # JSON — fallback на Gemini.
+    data: dict | None = None
     if openrouter_key:
-        text = await asyncio.to_thread(
-            _openrouter_call, SESSION_MEMORY_PROMPT, body,
-            api_key=openrouter_key, model=openrouter_model,
+        data = await _try_provider(
+            _openrouter_call,
+            label="openrouter",
+            api_key=openrouter_key,
+            model=openrouter_model,
+            body=body,
         )
-    if not text and gemini_api_key:
-        text = await asyncio.to_thread(_gemini_call, SESSION_MEMORY_PROMPT, body, gemini_api_key)
-
-    text = _strip_code_fence(text)
-    if not text:
-        return {}
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError as e:
-        _log.warn("memory analysis: bad json (%s): %s", e, text[:300])
+    if data is None and gemini_api_key:
+        data = await _try_provider(
+            _gemini_call,
+            label="gemini",
+            api_key=gemini_api_key,
+            model="",
+            body=body,
+        )
+    if data is None:
         return {}
     if not isinstance(data, dict):
         return {}

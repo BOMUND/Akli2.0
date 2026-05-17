@@ -171,11 +171,39 @@ class MemoryStore:
                 total -= size
 
 
+_DELETE_SENTINELS = {
+    "delete", "deleted", "remove", "removed",
+    "удалить", "удалено", "забыть", "забыто",
+    "[delete]", "[удалить]", "[забыть]",
+}
+
+
+def _is_delete_value(val: object) -> bool:
+    """LLM по промпту должен слать ``""`` или ``null`` для удаления факта.
+
+    На практике (особенно free-tier модели OpenRouter) ловится буквальное
+    слово ``DELETE`` / ``удалить`` в value — это явное намерение убрать
+    запись, а не сохранить такой текст как валидный факт. Расширяем набор
+    sentinel-ов, иначе в core_memory.json появляются «зомби» вида
+    ``{"value": "DELETE"}``.
+    """
+    if val is None:
+        return True
+    if isinstance(val, str):
+        s = val.strip().lower()
+        if not s:
+            return True
+        if s in _DELETE_SENTINELS:
+            return True
+    return False
+
+
 def _merge(dst: dict, patch: dict) -> None:
     now = datetime.now().isoformat(timespec="seconds")
     for k, v in patch.items():
-        # Явное удаление на верхнем уровне: ``{"key": None}`` / ``""`` / ``{}``.
-        if v in (None, "", {}):
+        # Явное удаление на верхнем уровне: ``{"key": None}`` / ``""`` / ``{}``
+        # или строковый sentinel («DELETE», «удалить», и т.п.).
+        if v in (None, "", {}) or (isinstance(v, str) and _is_delete_value(v)):
             dst.pop(k, None)
             continue
         if isinstance(v, dict):
@@ -190,7 +218,7 @@ def _merge(dst: dict, patch: dict) -> None:
             )
             if is_leaf:
                 val = v.get("value")
-                if val in (None, ""):
+                if _is_delete_value(val):
                     dst.pop(k, None)
                 else:
                     cur = dst.setdefault(k, {})

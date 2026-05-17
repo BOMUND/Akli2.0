@@ -192,8 +192,34 @@ class LiveSession:
             _log.warn("manual reconnect close failed: %s", e)
 
     def shutdown(self) -> None:
+        # Дроп буфера устройства из Qt-потока, чтобы не ждать пока event loop
+        # обработает _stop и доберётся до _teardown. Без этого ассистент
+        # бубнит из колонок ещё несколько секунд (websocket-receive в recv_loop
+        # блокирует TaskGroup, пока _stop_watcher не закроет сессию).
+        if self._player is not None:
+            try:
+                self._player.abort()
+            except Exception:
+                pass
         if self._loop is not None:
             self._loop.call_soon_threadsafe(self._stop.set)
+
+    async def _stop_watcher(self) -> None:
+        """Размыкает TaskGroup, когда установлен ``_stop``.
+
+        ``recv_loop`` блокируется в ``async for response in session.receive()``
+        и сам по себе не проснётся. Закрываем сессию явно — websocket
+        проваливается, recv_loop поднимает исключение, TaskGroup отменяет
+        остальные таски, _run_once завершается, while-loop run() видит
+        _stop.is_set() и попадает в _teardown.
+        """
+        await self._stop.wait()
+        session = self._session
+        if session is not None:
+            try:
+                await session.close()
+            except Exception as e:
+                _log.debug("stop watcher: session close failed: %s", e)
 
     # ───────────────────────────── рантайм ──
 
@@ -209,7 +235,11 @@ class LiveSession:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                if self._manual_reconnect_requested:
+                if self._stop.is_set():
+                    # _stop_watcher сам закрыл сессию — это штатный shutdown,
+                    # а не «крах».
+                    _log.debug("session closed on shutdown: %s", e)
+                elif self._manual_reconnect_requested:
                     _log.info("manual reconnect closed live session")
                 else:
                     _log.warn("session crashed: %s", e)
@@ -284,6 +314,9 @@ class LiveSession:
                     tg.create_task(self._send_loop())
                     tg.create_task(self._recv_loop())
                     tg.create_task(self._state.watchdog(self._stop))
+                    # Без этого таска TaskGroup ждёт recv_loop вечно — см.
+                    # docstring _stop_watcher.
+                    tg.create_task(self._stop_watcher())
             finally:
                 self._session = None
 

@@ -65,7 +65,19 @@ class _OpenRouter:
                 if resp.status_code != 200:
                     raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
                 data = resp.json()
-                reply = data["choices"][0]["message"]["content"].strip()
+                # OpenRouter иногда отдаёт ``message.content = null`` (особенно
+                # free-tier модели, которые молча отказали в генерации). Без
+                # явной проверки мы получали ``'NoneType' object has no attribute 'strip'``
+                # — это выглядело в логах как «attempt N failed» и весь call
+                # уходил в retry, хотя ответ просто пустой.
+                choices = data.get("choices") if isinstance(data, dict) else None
+                if not choices:
+                    raise RuntimeError(f"empty choices: {str(data)[:200]}")
+                msg = choices[0].get("message") if isinstance(choices[0], dict) else None
+                content = (msg or {}).get("content") if isinstance(msg, dict) else None
+                reply = (content or "").strip()
+                if not reply:
+                    raise RuntimeError("empty content in response")
                 _log.info("openrouter: chat ✓ ответ %d chars", len(reply))
                 return reply
             except Exception as e:

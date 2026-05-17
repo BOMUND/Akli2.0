@@ -109,6 +109,21 @@ class SpeakingState:
     def is_muted(self) -> bool:
         return self.phase is Phase.MUTED
 
+    def is_model_active(self) -> bool:
+        """Модель сейчас «живая»: думает, говорит или стреляет в плеер.
+
+        Нужно для UI-кнопки Interrupt: она должна быть активна и в
+        фазе MUTED, если пользователь замьютился посреди ответа модели —
+        микрофон выключен, но из колонок всё ещё идёт речь и её хочется
+        оборвать.
+        """
+        with self._lock:
+            if self._phase in (Phase.THINKING, Phase.SPEAKING):
+                return True
+            if self._phase is Phase.MUTED and self._chunks_in_flight > 0:
+                return True
+            return False
+
     def snapshot(self) -> _Snapshot:
         with self._lock:
             return _Snapshot(
@@ -306,10 +321,19 @@ class SpeakingState:
         return True
 
     def request_interrupt(self) -> bool:
-        """Остановить текущий ответ/размышление/тулзу по кнопке Interrupt."""
+        """Остановить текущий ответ/размышление/тулзу по кнопке Interrupt.
+
+        Работает и в фазе MUTED: если пользователь замьютился посреди ответа,
+        в плеере всё ещё есть невоспроизведённые чанки (chunks_in_flight > 0)
+        — нужно их почистить и оставить фазу MUTED. Без этого кнопка
+        выглядела брокенной: модель бубнит в колонки, а Interrupt не работает.
+        """
         player_flush: Callable[[], None] | None = None
         with self._lock:
-            active = self._phase in (Phase.THINKING, Phase.SPEAKING)
+            active = (
+                self._phase in (Phase.THINKING, Phase.SPEAKING)
+                or (self._phase is Phase.MUTED and self._chunks_in_flight > 0)
+            )
             if not active:
                 return False
             self._chunks_in_flight = 0
@@ -318,7 +342,11 @@ class SpeakingState:
             self._last_audio_progress_at = 0.0
             self._thinking_started_at = 0.0
             player_flush = self._on_player_flush
-            if self._phase is not Phase.MUTED:
+            if self._phase is Phase.MUTED:
+                # Из MUTED не выпрыгиваем, но после unmute хочется вернуться
+                # в LISTENING, а не в SPEAKING (который мы только что выкинули).
+                self._pre_mute_phase = Phase.LISTENING
+            else:
                 self._switch(Phase.LISTENING)
 
         if player_flush is not None:

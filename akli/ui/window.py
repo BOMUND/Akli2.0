@@ -150,7 +150,11 @@ class MainWindow(QMainWindow):
         self._orb.set_phase(ph)
         self._phase_label.setText(label_for_phase(ph))
         self._stop_btn.setEnabled(ph is Phase.TOOL)
-        self._interrupt_btn.setEnabled(ph in (Phase.THINKING, Phase.SPEAKING))
+        # Interrupt: разрешаем и в MUTED, если модель сейчас всё ещё что-то
+        # говорит (chunks_in_flight > 0). Иначе кнопка визуально серая,
+        # пользователь в недоумении: «почему не могу заткнуть, если в
+        # колонках бубнят».
+        self._interrupt_btn.setEnabled(self._state.is_model_active())
         # Reconnect имеет смысл только когда есть активная сессия. На IDLE
         # (старт приложения / окно между попытками реконнекта) кнопка
         # вернёт "reconnect unavailable" — лучше сразу её дизейблить.
