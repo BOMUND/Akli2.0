@@ -155,7 +155,10 @@ class AkliApp:
         if self._session is not None:
             self._session.shutdown()
         if self._thread is not None:
-            self._thread.join(timeout=4.0)
+            # Teardown в LiveSession ждёт до 5 сек на summary последней
+            # сессии — даём join времени дольше, чем live timeout, чтобы
+            # успеть штатно дожать LLM, прежде чем процесс умрёт.
+            self._thread.join(timeout=8.0)
 
     # ───────────────────────────── signals ──
 

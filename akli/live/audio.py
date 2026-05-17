@@ -249,6 +249,11 @@ class PlayerStream:
         self._inbox: _stdqueue.Queue = _stdqueue.Queue()
         self._thread: threading.Thread | None = None
         self._stop_flag = threading.Event()
+        # ``_stream`` хранится на инстансе только для ``abort()``: чтобы
+        # _run сам мог корректно закрыть его в finally, а внешний код мог
+        # дёрнуть ``stream.abort()`` для немедленного обнуления буфера
+        # устройства (без него закрытие приложения вешает ~50–500 мс речи).
+        self._stream: sd.RawOutputStream | None = None
 
     def start(self) -> None:
         if self._thread is not None:
@@ -271,6 +276,28 @@ class PlayerStream:
         if self._thread is not None:
             self._thread.join(timeout=2.0)
             self._thread = None
+
+    def abort(self) -> None:
+        """Жёстко сбросить буфер устройства — речь обрывается мгновенно.
+
+        ``stream.stop()`` (в _run finally) и обычный ``stop()`` ждут пока
+        текущий чанк дописался — это 50–500 мс, в течение которых модель
+        продолжает говорить уже после закрытия окна. ``abort()`` дропает
+        device buffer немедленно. Если поток уже закрылся — no-op.
+        """
+        s = self._stream
+        if s is None:
+            return
+        try:
+            s.abort()
+        except Exception:
+            pass
+
+    def stop_now(self) -> None:
+        """flush + abort + stop одним вызовом — для teardown/exit."""
+        self.flush()
+        self.abort()
+        self.stop()
 
     def flush(self) -> None:
         """Сбрасывает невоспроизведённый хвост (нужно при реконнекте, фикс B7).
@@ -313,6 +340,7 @@ class PlayerStream:
                 device     = self._device,
             )
             stream.start()
+            self._stream = stream
         except Exception as e:
             _log.error("player open failed: %s", e)
             return
@@ -333,6 +361,7 @@ class PlayerStream:
                 finally:
                     self._state.on_chunk_drained()
         finally:
+            self._stream = None
             try:
                 stream.stop()
                 stream.close()

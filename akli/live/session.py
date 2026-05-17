@@ -175,6 +175,10 @@ class LiveSession:
         self._clear_send_queue()
         if self._player is not None:
             self._player.flush()
+        # Ротация transcript — после фактического закрытия Live-сессии в run().
+        # Здесь не трогаем self._transcript, чтобы хвостовые события
+        # _recv_loop (которые сейчас ignored через ``_ignore_output_until``,
+        # но всё равно могут что-то ещё дописать) попали в правильный файл.
         asyncio.create_task(self._close_live_session())
 
     async def _close_live_session(self) -> None:
@@ -219,6 +223,10 @@ class LiveSession:
                 backoff_idx = 0
                 delay = 0.2
                 self._ui_log("SYS: reconnecting.")
+                # Ротация transcript строго между прогонами _run_once.
+                # На момент сюда: старая сессия закрыта, _recv_loop остановлен,
+                # никаких новых append-ов в старый файл не будет.
+                self._rotate_transcript_for_reconnect()
             else:
                 lived = time.monotonic() - connected_at
                 if lived >= SHORT_RUN_RESET_SEC:
@@ -360,14 +368,62 @@ class LiveSession:
             self._mic.stop()
             self._mic = None
         if self._player is not None:
-            self._player.stop()
+            # ``stop_now`` дропает буфер устройства мгновенно — без него после
+            # закрытия окна ассистент ещё ~50–500 мс бубнит из колонок.
+            self._player.stop_now()
             self._player = None
         self._state.go_idle()
-        # Закрываем транскрипт — summary/core обработка уйдёт в следующий запуск.
+        # Закрываем транскрипт и пробуем сразу же снять summary — если LLM
+        # отзовётся за 5 секунд, summary будет на диске на момент следующего
+        # запуска (а не появится только после processor). Если нет — пускай
+        # processor возьмёт на старте следующей сессии.
+        old_path = self._transcript.path
         try:
             self._transcript.close()
         except Exception as e:
             _log.warn("transcript close failed: %s", e)
+        try:
+            await asyncio.wait_for(
+                self._finalize_transcript_async(old_path),
+                timeout=5.0,
+            )
+        except asyncio.TimeoutError:
+            _log.info("teardown: summary timed out — pickup on next start")
+        except Exception as e:
+            _log.warn("teardown summary failed: %s", e)
+
+    def _rotate_transcript_for_reconnect(self) -> None:
+        old = self._transcript
+        try:
+            old.close()
+        except Exception as e:
+            _log.warn("reconnect: transcript close failed: %s", e)
+        self._transcript = Transcript()
+        _log.info("reconnect: new transcript %s", self._transcript.path.name)
+        # Не блокируем reconnect: пускай summary крутится в фоне.
+        asyncio.create_task(self._finalize_transcript_async(old.path))
+
+    async def _finalize_transcript_async(self, path) -> None:
+        """Обработать ровно один только что закрытый transcript.
+
+        Используется и при reconnect (rotation), и при teardown (с timeout).
+        Если LLM не отвечает / нет ключей — файл остаётся без ``.done`` и
+        будет подобран на следующем запуске через ``process_pending_transcripts``.
+        Обрабатываем именно ОДИН файл, не весь pending pool — иначе при
+        reconnect случайный накопившийся хвост старых диалогов забил бы LLM.
+        """
+        try:
+            from akli.memory.processor import process_one_transcript
+            await process_one_transcript(
+                path,
+                memory           = self._memory,
+                gemini_api_key   = self._config.gemini_api_key,
+                openrouter_key   = (self._config.openrouter_api_key
+                                    if self._config.use_openrouter else ""),
+                openrouter_model = self._config.openrouter_model,
+            )
+        except Exception as e:
+            _log.warn("finalize_transcript %s failed: %s", path.name, e)
 
     # ───────────────────────────── send / recv ──
 

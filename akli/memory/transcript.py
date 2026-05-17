@@ -108,3 +108,23 @@ def read_transcript(path: Path) -> str:
     except Exception as e:
         _log.warn("read_transcript failed for %s: %s", path.name, e)
         return ""
+
+
+def is_closed(path: Path) -> bool:
+    """Был ли transcript штатно закрыт.
+
+    ``Transcript.close()`` дописывает строку ``# session closed <iso>``.
+    Если она есть — файл точно не пишется параллельно, можно обрабатывать
+    немедленно, даже если mtime свежий (например, пользователь закрыл
+    приложение и сразу открыл снова).
+    """
+    try:
+        # Хвост достаточно маленький: достаточно последних 256 байт.
+        with path.open("rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - 256))
+            tail = f.read().decode("utf-8", errors="ignore")
+    except Exception:
+        return False
+    return "# session closed " in tail
