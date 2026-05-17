@@ -2,9 +2,25 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+
+# Runtime data — created on first launch.
+config/akli.json
 config/api_keys.json
+state/memory.json
+state/core_memory.json
+state/reminders.json
+state/appcache.json
+state/dialogs/
+state/dialog_summaries/
 memory/memory.json
+
+# Virtualenvs / IDE
 .venv/
 venv/
 .idea/
 .vscode/
+
+# Build artefacts
+build/
+dist/
+*.egg-info/

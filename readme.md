@@ -1,61 +1,77 @@
 # Akli 2.0
 
-Голосовой ИИ-ассистент с реальным временем: слушает микрофон через Gemini Live,
-понимает команды на любом языке и сам решает, какой инструмент дёрнуть —
-открыть приложение, поискать в браузере, поработать с файлами, поставить
-напоминание или запустить мини-агента на дев-задачу.
+Голосовой ассистент на основе Gemini Live API.
 
-## Что умеет
+## Запуск
 
-| Возможность | Описание |
-|---|---|
-| Голос в реальном времени | Низкая задержка, любой язык, прерывание речи на лету |
-| Управление системой | Запуск приложений, громкость/яркость, окна, скриншоты |
-| Файлы и документы | PDF, Word, Excel, код, аудио, видео — анализ и преобразование |
-| Браузер | Открытие сайтов, поиск, клики, заполнение форм через Playwright |
-| Напоминания | Планировщик Windows для отложенных уведомлений |
-| Долговременная память | Запоминает имя, проекты, привычки и подтягивает их в промпт |
-| Мульти-шаговые задачи | Планировщик разбивает цель на шаги и сам их выполняет |
+```powershell
+# Установка (один раз)
+python -m pip install -r requirements.txt
+python -m playwright install chromium
 
-## Стек
-
-- Python 3.11+ (рекомендую 3.12)
-- Gemini Live API — голосовой канал и tool-calling
-- OpenRouter (бесплатные модели) — текстовая аналитика, память, переводы
-- PyQt6 — UI
-- Playwright — управление браузером
-- Windows-only зависимости (pycaw / comtypes / win10toast) — используются
-  только в `actions/computer_settings.py` и `actions/reminder.py`
-
-## Быстрый старт
-
-```bash
-git clone https://github.com/BOMUND/Akli2.0.git
-cd Akli2.0
-python setup.py
+# Запуск
+python -m akli
+# или совместимый старый запуск
 python main.py
 ```
 
-При первом запуске UI попросит вставить ключи Gemini и OpenRouter — они
-сохранятся в `config/api_keys.json` (этот файл в `.gitignore`).
+При первом запуске откроется диалог, который попросит ключ Gemini API.
+Конфиг сохраняется в `config/akli.json`. OpenRouter опционален и
+выключен по умолчанию.
 
-## Структура
+## Архитектура
 
 ```
-main.py                — точка входа, Gemini Live + диспетчер tool-call'ов
-ui.py                  — PyQt6-интерфейс (HUD, лог, оверлей настройки)
-or_client.py           — клиент OpenRouter с пулом моделей и fallback'ом
-core/prompt.txt        — системный промпт ассистента
-config/                — настройки и API-ключи
-memory/                — JSON-память пользователя
-actions/               — конкретные инструменты (browser_control, file_*,
-                          reminder, dev_agent, web_search, computer_*, ...)
-agent/                 — планировщик и исполнитель мульти-шаговых задач
+akli/
+├── core/
+│   ├── app.py        — точка входа (Qt + LiveSession)
+│   ├── config.py     — config/akli.json
+│   └── llm.py        — опц. OpenRouter (text fallback)
+├── live/             — рантайм Gemini Live
+│   ├── state.py      — фазы (LISTENING / SPEAKING / TOOL / ...) + watchdog
+│   ├── audio.py      — микрофон / плеер
+│   └── session.py    — WebSocket + reconnect + tool dispatch
+├── tools/            — инструменты
+│   ├── apps.py       — open_app (AppsFolder lookup)
+│   ├── keys.py       — type_text (clipboard paste, любой язык)
+│   ├── scheduler.py  — remind (threading.Timer + parse естественного времени)
+│   ├── files.py      — read/write/list/...
+│   ├── web.py        — DuckDuckGo + Gemini grounded fallback
+│   ├── browser.py    — Playwright (5 операций)
+│   ├── settings.py   — громкость / lock / screenshot
+│   └── stubs.py      — file_processor / dev_agent (declared, disabled)
+├── memory/
+│   ├── store.py      — state/memory.json (atomic, trim)
+│   └── extract.py    — извлечение фактов одним вызовом Gemini
+├── ui/
+│   ├── app.py        — связка Qt ↔ LiveSession
+│   ├── window.py     — главное окно
+│   ├── setup.py      — стартовый диалог
+│   ├── hud.py        — HUD-кружок (фазу видно)
+│   └── theme.py      — палитра и QSS
+├── platform/
+│   ├── dpi.py        — DPI awareness ДО QApplication
+│   ├── appsfolder.py — Get-StartApps кэш
+│   └── layout.py     — переключение раскладки (fallback)
+└── utils/
+    ├── log.py        — структурный логгер
+    ├── timeparse.py  — «через 5 минут», «tomorrow at 9am»
+    └── textinput.py  — clipboard paste
 ```
 
-## Зачем
+Конфигурация и данные:
 
-Учебный проект: хотелось своими руками собрать ассистента, который не висит
-на одном LLM-провайдере, а раздаёт нагрузку между Gemini (голос) и
-OpenRouter (текст/анализ), и при этом честно умеет нажимать кнопки в
-системе, а не только болтать.
+* `config/akli.json` — ключи и предпочтения.
+* `state/memory.json` — долговременная память.
+* `state/reminders.json` — отложенные напоминания.
+* `state/appcache.json` — кэш установленных приложений.
+* `prompt.txt` — системный промпт.
+
+## Платформа
+
+MVP таргетит Windows 10. На macOS/Linux часть инструментов работает
+ограниченно (нет DPI, AppsFolder, win10toast).
+
+## Voice
+
+По умолчанию `Puck` (мужской). Сменить — в `akli/live/session.py`.

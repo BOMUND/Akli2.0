@@ -1,4 +1,4 @@
-"""Compatibility entrypoint for users who still run `python main.py`."""
+"""Точка входа: ``python -m akli``."""
 
 from akli.core.app import main
 
