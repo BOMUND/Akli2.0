@@ -36,13 +36,13 @@ CHANNELS:            Final = 1
 # другом месте (см. фикс recv-loop). Возвращаемся к 1024.
 CHUNK_FRAMES:        Final = 1024
 
-# Echo-gate: пока модель говорит, оцениваем уровень утечки динамиков
-# в микрофон. В Gemini отправляется только сигнал, который заметно выше
-# этой утечки; всё остальное считается эхом и дропается.
-ECHO_GATE_DB:        Final = 14.0   # пользователь должен быть сильно громче эха
-ECHO_VOICE_FLOOR:    Final = 350.0  # защита от пропуска тихого шума/хвостов TTS
-ECHO_BASELINE_HALF:  Final = 0.8    # сек, окно для расчёта фона
-ECHO_CONFIRM_CHUNKS: Final = 3      # короткие всплески динамиков не считаем голосом
+# Gemini Live barge-in требует, чтобы микрофонные фреймы доходили до сервера
+# даже во время речи модели. Echo-gate можно включить позже настройкой UI.
+ECHO_GATE_WHILE_SPEAKING: Final = False
+ECHO_GATE_DB:             Final = 8.0
+ECHO_VOICE_FLOOR:         Final = 250.0
+ECHO_BASELINE_HALF:       Final = 0.5
+ECHO_CONFIRM_CHUNKS:      Final = 1
 # Сколько секунд между диагностическими логами про микрофон.
 MIC_STATS_INTERVAL_SEC: Final = 5.0
 
@@ -126,16 +126,13 @@ class MicStream:
         raw = bytes(indata)
         rms = _rms_i16(raw)
 
-        if phase is Phase.SPEAKING:
-            # Во время речи модели применяем echo-gate. Baseline — это
-            # фоновый шум комнаты + динамика. Настоящий перебив должен
-            # держаться несколько аудио-чанков, а не быть одним пиком TTS.
+        if phase is Phase.SPEAKING and ECHO_GATE_WHILE_SPEAKING:
             self._update_baseline(rms)
             if not self._is_confirmed_voice_above_baseline(rms):
                 self.silent += 1
                 self._maybe_log_stats()
                 return
-        else:
+        elif phase is not Phase.SPEAKING:
             self._voice_candidate_chunks = 0
 
         payload = {
