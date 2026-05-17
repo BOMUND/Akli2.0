@@ -102,6 +102,10 @@ class MicStream:
         self.silent   = 0
         self.dropped  = 0
         self._last_stats_at  = 0.0
+        # Последний замеренный RMS в dBFS — читается из UI для
+        # полоски уровня в settings. Пишется в аудио-потоке, читается
+        # в GUI-потоке — расии не страшны: float64 атомарно на x86/ARM.
+        self._last_level_db: float = -60.0
 
         # Скользящий baseline RMS — используем только пока модель говорит,
         # чтобы отличить «эхо динамиков» от настоящего голоса.
@@ -125,6 +129,9 @@ class MicStream:
 
         raw = bytes(indata)
         rms = _rms_i16(raw)
+        # Простой перевод в dBFS: 20*log10(rms/32768). Клампим для стабильной
+        # визуализации прогресс-бара в settings.
+        self._last_level_db = max(-60.0, min(0.0, 20.0 * _log10_safe(rms / 32768.0)))
 
         if phase is Phase.SPEAKING and ECHO_GATE_WHILE_SPEAKING:
             self._update_baseline(rms)
@@ -212,6 +219,10 @@ class MicStream:
         )
         self._stream.start()
         _log.info("mic stream started @ %d Hz", SEND_SAMPLE_RATE)
+
+    def peek_level_db(self) -> float:
+        """Текущий уровень микрофона в dBFS (-60…0)."""
+        return self._last_level_db
 
     def stop(self) -> None:
         s = self._stream

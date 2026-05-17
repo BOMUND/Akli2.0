@@ -97,4 +97,94 @@ QPushButton#stop:disabled {{
 QLabel#title       {{ font-size: 22pt; font-weight: 600; }}
 QLabel#phase_label {{ font-size: 14pt; font-weight: 500; letter-spacing: 1px; }}
 QLabel#hint        {{ color: {PALETTE.fg_muted}; }}
+QFrame#header {{
+    background-color: {PALETTE.bg_panel};
+    border:           1px solid #1f2937;
+    border-radius:    10px;
+}}
+QLabel#brand {{
+    font-size:   16pt;
+    font-weight: 700;
+    color:       {PALETTE.accent};
+    letter-spacing: 2px;
+}}
+QPushButton#stop_header {{
+    background-color: #5b1a1a;
+    color:            #ffe7e7;
+    border:           1px solid #7a2828;
+    font-weight:      600;
+    padding:          8px 18px;
+    border-radius:    8px;
+}}
+QPushButton#stop_header:hover    {{ background-color: #6e2222; }}
+QPushButton#stop_header:disabled {{
+    background-color: #2a1414;
+    color:            #7a3a3a;
+    border:           1px solid #3a1818;
+}}
+QPushButton#settings_btn {{
+    background-color: #1c2433;
+    border:           1px solid #2a334a;
+    border-radius:    8px;
+    padding:          6px;
+    font-size:        16pt;
+}}
+QPushButton#settings_btn:hover {{ background-color: #232c40; }}
+QTabWidget::pane {{
+    border:           1px solid #1f2937;
+    border-radius:    8px;
+    background-color: {PALETTE.bg_panel};
+}}
+QTabBar::tab {{
+    background-color: #161b22;
+    color:            {PALETTE.fg_muted};
+    padding:          8px 16px;
+    border:           1px solid #1f2937;
+    border-bottom:    none;
+    border-top-left-radius:  6px;
+    border-top-right-radius: 6px;
+    margin-right:     2px;
+}}
+QTabBar::tab:selected {{
+    background-color: {PALETTE.bg_panel};
+    color:            {PALETTE.fg_primary};
+}}
+QTabBar::tab:hover {{ color: {PALETTE.fg_primary}; }}
+QProgressBar {{
+    background-color: #161b22;
+    border:           1px solid #1f2937;
+    border-radius:    6px;
+    text-align:       center;
+    color:            {PALETTE.fg_primary};
+    height:           18px;
+}}
+QProgressBar::chunk {{
+    background-color: {PALETTE.phase_listening};
+    border-radius:    5px;
+}}
+QTableWidget, QListWidget {{
+    background-color: #161b22;
+    border:           1px solid #1f2937;
+    border-radius:    8px;
+    gridline-color:   #1f2937;
+}}
+QHeaderView::section {{
+    background-color: #1c2433;
+    color:            {PALETTE.fg_muted};
+    padding:          4px 8px;
+    border:           none;
+    border-right:     1px solid #1f2937;
+}}
+QComboBox {{
+    background-color: {PALETTE.bg_input};
+    border:           1px solid #1f2937;
+    border-radius:    6px;
+    padding:          6px 10px;
+}}
+QComboBox QAbstractItemView {{
+    background-color: {PALETTE.bg_panel};
+    border:           1px solid #1f2937;
+    selection-background-color: {PALETTE.accent};
+    selection-color:  #0a0d12;
+}}
 """

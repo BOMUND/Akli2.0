@@ -36,7 +36,9 @@ from akli.utils.log import get_logger
 
 _log = get_logger("live")
 
-VOICE_NAME  = "Puck"       # мужской голос Gemini Live
+# Дефолтный голос — используется если в конфиге пусто. Раньше это была
+# константа ``VOICE_NAME = "Puck"`` — теперь юзер меняет в settings.
+DEFAULT_VOICE_NAME = "Puck"       # мужской голос Gemini Live
 # 128 слотов × 64 мс = до ~8 сек буфера. Запас на временные замедления
 # сети, без переразрастания: backpressure при заполнении значит, что
 # либо сеть упала, либо WebSocket в бад-стейте — оба случая мы ловим в
@@ -178,6 +180,20 @@ class LiveSession:
             )
         except Exception as e:
             _log.debug("activity_start signal failed: %s", e)
+
+    def mic_level_db(self) -> float:
+        """Текущий уровень микрофона в dBFS. -60 если стрим выключен."""
+        if self._mic is None:
+            return -60.0
+        return self._mic.peek_level_db()
+
+    def _voice_name(self) -> str:
+        return self._config.gemini_voice_name or DEFAULT_VOICE_NAME
+
+    @staticmethod
+    def _device_index(idx: int) -> int | None:
+        # ``-1`` в конфиге = «дефолтное устройство ОС», sounddevice ждёт None.
+        return None if idx is None or idx < 0 else idx
 
     def request_reconnect(self) -> bool:
         """Жёстко пересоздать Gemini Live session вручную.
@@ -327,7 +343,7 @@ class LiveSession:
         model_id = self._config.gemini_live_model or AppConfig().gemini_live_model
         async with self._client.aio.live.connect(model=model_id, config=cfg) as session:
             self._session = session
-            _log.info("connected: %s, voice=%s", model_id, VOICE_NAME)
+            _log.info("connected: %s, voice=%s", model_id, self._voice_name())
             self._ui_log("SYS: Akli online.")
 
             # На реконнекте дочекинаем накопленный текст пользователя
@@ -370,7 +386,7 @@ class LiveSession:
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=VOICE_NAME),
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=self._voice_name()),
                 ),
             ),
             system_instruction=types.Content(
@@ -418,13 +434,18 @@ class LiveSession:
         if self._send_q is None:
             self._send_q = asyncio.Queue(maxsize=SEND_QUEUE)
         if self._player is None:
-            self._player = PlayerStream(self._state)
+            self._player = PlayerStream(self._state, device=self._device_index(self._config.speaker_index))
             self._player.start()
             # Дать state-watchdog'у доступ к player.flush — он сам решает,
             # когда нужен flush (interrupt от сервера, форс LISTENING).
             self._state.set_player_flush(self._player.flush)
         if self._mic is None:
-            self._mic = MicStream(self._state, self._send_q, self._loop)  # type: ignore[arg-type]
+            self._mic = MicStream(
+                self._state,
+                self._send_q,
+                self._loop,  # type: ignore[arg-type]
+                device=self._device_index(self._config.mic_index),
+            )
             self._mic.start()
 
     async def _teardown(self) -> None:
