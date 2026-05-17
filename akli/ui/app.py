@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import QApplication
 from akli.core.config import AppConfig, load, save
 from akli.live.session import LiveSession
 from akli.live.state import Phase, SpeakingState
-from akli.memory.store import MemoryStore, RecentStore
+from akli.memory.store import MemoryStore
 from akli.memory.processor import process_pending_transcripts
 from akli.tools import build_router
 from akli.ui.setup import SetupDialog
@@ -46,7 +46,6 @@ class AkliApp:
         self._config: AppConfig = load()
         self._state = SpeakingState()
         self._memory = MemoryStore()
-        self._recent = RecentStore()
         self._bridge = _UiBridge()
         self._bridge.log_line.connect(self._on_log)
 
@@ -109,7 +108,6 @@ class AkliApp:
             state  = self._state,
             router = router,
             memory = self._memory,
-            recent = self._recent,
             ui_log = lambda line: self._bridge.log_line.emit(line),
         )
 
@@ -128,10 +126,9 @@ class AkliApp:
         # прошлой сессии файлы лежали на диске без ``.done`` маркера —
         # теперь извлекаем факты + summary.
         self._loop.create_task(process_pending_transcripts(
-            memory          = self._memory,
-            recent          = self._recent,
-            gemini_api_key  = self._config.gemini_api_key,
-            openrouter_key  = (self._config.openrouter_api_key
+            memory           = self._memory,
+            gemini_api_key   = self._config.gemini_api_key,
+            openrouter_key   = (self._config.openrouter_api_key
                                 if self._config.use_openrouter else ""),
             openrouter_model = self._config.openrouter_model,
         ))

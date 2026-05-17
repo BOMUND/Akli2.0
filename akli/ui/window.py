@@ -100,6 +100,7 @@ class MainWindow(QMainWindow):
         controls.addWidget(self._interrupt_btn)
 
         self._reconnect_btn = QPushButton("Reconnect")
+        self._reconnect_btn.setEnabled(False)
         self._reconnect_btn.clicked.connect(self.reconnect_clicked.emit)
         controls.addWidget(self._reconnect_btn)
 
@@ -150,6 +151,10 @@ class MainWindow(QMainWindow):
         self._phase_label.setText(label_for_phase(ph))
         self._stop_btn.setEnabled(ph is Phase.TOOL)
         self._interrupt_btn.setEnabled(ph in (Phase.THINKING, Phase.SPEAKING))
+        # Reconnect имеет смысл только когда есть активная сессия. На IDLE
+        # (старт приложения / окно между попытками реконнекта) кнопка
+        # вернёт "reconnect unavailable" — лучше сразу её дизейблить.
+        self._reconnect_btn.setEnabled(ph is not Phase.IDLE)
         self.set_mute_text(ph is Phase.MUTED)
 
     # ───────────────────────────── helpers ──

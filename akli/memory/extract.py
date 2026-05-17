@@ -97,14 +97,19 @@ async def analyze_session_memory(
     if len(body) < 50:
         return {}
 
+    # OpenRouter — приоритетный провайдер: у Gemini free-tier лимит 20/день,
+    # его лучше беречь под голосовую сессию. OpenRouter (gemma:free и т.п.)
+    # ходит асинхронно через ``asyncio.to_thread`` и не упирается в ту же
+    # квоту. Если OpenRouter недоступен / квота кончилась — fallback на
+    # Gemini.
     text = ""
-    if gemini_api_key:
-        text = await asyncio.to_thread(_gemini_call, SESSION_MEMORY_PROMPT, body, gemini_api_key)
-    if not text and openrouter_key:
+    if openrouter_key:
         text = await asyncio.to_thread(
             _openrouter_call, SESSION_MEMORY_PROMPT, body,
             api_key=openrouter_key, model=openrouter_model,
         )
+    if not text and gemini_api_key:
+        text = await asyncio.to_thread(_gemini_call, SESSION_MEMORY_PROMPT, body, gemini_api_key)
 
     text = _strip_code_fence(text)
     if not text:

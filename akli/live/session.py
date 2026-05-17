@@ -29,7 +29,7 @@ from akli.live.audio import (
     SEND_SAMPLE_RATE,
 )
 from akli.live.state import Phase, SpeakingState
-from akli.memory.store import MemoryStore, RecentStore
+from akli.memory.store import MemoryStore
 from akli.memory.transcript import Transcript
 from akli.tools.registry import Router
 from akli.utils.log import get_logger
@@ -57,7 +57,6 @@ class LiveSession:
         state:   SpeakingState,
         router:  Router,
         memory:  MemoryStore,
-        recent:  RecentStore,
         ui_log:  Callable[[str], None],
     ) -> None:
         self._config = config
@@ -85,8 +84,8 @@ class LiveSession:
         self._ignore_output_until = 0.0
         # Транскрипт сессии: append-only файл state/dialogs/<ts>.txt.
         # Live path только пишет диалог; summary/core-memory обработка идёт
-        # после закрытия transcript на следующем старте приложения.
-        self._recent = recent
+        # после закрытия transcript на следующем старте приложения через
+        # akli.memory.processor (см. ui/app.py).
         self._transcript = Transcript()
 
     # ───────────────────────────── публичный API ──
@@ -128,31 +127,51 @@ class LiveSession:
         return self._state.request_stop()
 
     def request_interrupt(self) -> bool:
-        """Мягко остановить текущий ответ без reconnect и потери context."""
+        """Мягко остановить текущий ответ без reconnect и потери context.
+
+        Вызывается из Qt UI-потока. Всё что касается буферов / плеера / VAD-таймера
+        — мутируется из event-loop потока, иначе гонка с ``_recv_loop``.
+        """
+        if self._session is None:
+            return False
         ok = self._state.request_interrupt()
         if not ok:
             return False
+        if self._loop is not None:
+            self._loop.call_soon_threadsafe(self._apply_interrupt)
+        return True
+
+    def _apply_interrupt(self) -> None:
+        # ``_in_buf`` намеренно не трогаем: это партиал пользовательской
+        # транскрипции (для UI-лога), interrupt прерывает только ответ
+        # модели, а не ввод пользователя. На полный сброс — reconnect.
         self._out_buf.clear()
         self._out_has_transcription = False
+        # Короткое окно: игнорить любой чанк/текст от сервера, который успел уже
+        # вылететь до того, как interrupt дошёл. Сервер по факту вышлет свой
+        # ``interrupted=True`` в ближайшие ~100–300 мс — этого хватает.
         self._ignore_output_until = time.monotonic() + 0.5
         if self._player is not None:
             self._player.flush()
-        return True
 
     def request_reconnect(self) -> bool:
-        """Жёстко пересоздать Gemini Live session вручную."""
-        active = self._session is not None
-        if not active:
+        """Жёстко пересоздать Gemini Live session вручную.
+
+        Вызывается из Qt UI-потока. Вся работа (буферы, закрытие сокета)
+        выполняется в event-loop через ``call_soon_threadsafe``. Сам флаг
+        ``_manual_reconnect_requested`` взводится сразу, чтобы ``run()``
+        в любом случае увидел: падение инициировали мы, backoff не нужен.
+        """
+        if self._session is None or self._loop is None:
             return False
         self._manual_reconnect_requested = True
+        self._loop.call_soon_threadsafe(self._apply_reconnect)
+        return True
+
+    def _apply_reconnect(self) -> None:
         self._out_buf.clear()
         self._in_buf.clear()
         self._out_has_transcription = False
-        if self._loop is not None:
-            self._loop.call_soon_threadsafe(self._abort_live_session)
-        return True
-
-    def _abort_live_session(self) -> None:
         self._clear_send_queue()
         if self._player is not None:
             self._player.flush()
@@ -237,7 +256,9 @@ class LiveSession:
         # между падением сокета и пересозданием сессии (часть фикса B7).
         self._clear_send_queue()
 
-        model_id = self._config.gemini_live_model or "gemini-live-2.5-flash-preview"
+        # Fallback должен совпадать с дефолтом AppConfig — иначе при пустом
+        # ``gemini_live_model`` мы рискуем приземлиться на устаревшую модель.
+        model_id = self._config.gemini_live_model or AppConfig().gemini_live_model
         async with self._client.aio.live.connect(model=model_id, config=cfg) as session:
             self._session = session
             _log.info("connected: %s, voice=%s", model_id, VOICE_NAME)
@@ -432,7 +453,15 @@ class LiveSession:
                     out_tr = sc.output_transcription
                     if out_tr is not None and not ignore_output:
                         if out_tr.text:
-                            self._out_has_transcription = True
+                            if not self._out_has_transcription:
+                                # Первая транскрипция в ходу: отбрасываем
+                                # «черновик» из ``parts[].text``, который
+                                # мог попасть в буфер чуть раньше. Иначе
+                                # один и тот же ответ модели окажется в
+                                # Activity-логе дважды (через parts[] +
+                                # через transcription).
+                                self._out_buf.clear()
+                                self._out_has_transcription = True
                             self._out_buf.append(out_tr.text)
 
                     # Native-audio модель шлёт текст в model_turn.parts[].text

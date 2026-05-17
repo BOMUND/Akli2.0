@@ -175,6 +175,25 @@ class Scheduler:
 
 # ─────────────────────────── default notification ──
 
+def _show_windows_messagebox(msg: str) -> None:
+    """MessageBoxW в отдельном потоке: окно модальное и блокирует поток-
+    создатель до клика. Если scheduler-таск запустит его синхронно — все
+    следующие напоминания зависнут в очереди до тех пор, пока пользователь
+    не дотронется до окна. Поэтому всегда в новом thread."""
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(0, msg, "Akli reminder", 0x40 | 0x1000)
+    except Exception as e:
+        _log.warn("Windows reminder popup failed: %s", e)
+
+
+def _osascript_escape(text: str) -> str:
+    # AppleScript принимает только двойные кавычки внутри строк, обратный
+    # слэш — escape-метасимвол. Экранируем оба, иначе при сообщении с
+    # цитатами/слэшами osascript ругается и тост не показывается.
+    return text.replace("\\", "\\\\").replace('"', '\\"')
+
+
 def _default_notify(r: Reminder) -> None:
     msg = r.message or "Reminder"
     _log.info("REMINDER FIRED: %s", msg)
@@ -193,8 +212,12 @@ def _default_notify(r: Reminder) -> None:
         except Exception as e:
             _log.debug("win10toast reminder failed: %s", e)
         try:
-            import ctypes
-            ctypes.windll.user32.MessageBoxW(0, msg, "Akli reminder", 0x40 | 0x1000)
+            threading.Thread(
+                target = _show_windows_messagebox,
+                args   = (msg,),
+                daemon = True,
+                name   = "AkliReminderBox",
+            ).start()
             return
         except Exception as e:
             if toast_sent:
@@ -203,7 +226,9 @@ def _default_notify(r: Reminder) -> None:
     elif sys.platform == "darwin":
         try:
             import subprocess
-            subprocess.Popen(["osascript", "-e", f'display notification "{msg}" with title "Akli"'])
+            escaped = _osascript_escape(msg)
+            subprocess.Popen(["osascript", "-e",
+                              f'display notification "{escaped}" with title "Akli"'])
             return
         except Exception as e:
             _log.debug("macOS notification failed: %s", e)

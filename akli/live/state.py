@@ -27,7 +27,14 @@ from akli.utils.log import get_logger
 
 _log = get_logger("state")
 
-SPEAKING_STUCK_SECONDS  = 30.0
+# SPEAKING_STUCK_SECONDS — это «нет аудио-прогресса X секунд», а не «фаза
+# SPEAKING длится X секунд». Метрика `_last_audio_progress_at` ресетится
+# на каждом чанке от сервера и каждом доигранном чанке плеера. Если модель
+# говорит долго — таймер всё время сбрасывается. Watchdog ловит только
+# настоящие зависы (turn_complete потерялся в preview API).
+# 15 с — компромисс: на короткие паузы preview API (5-8 с) не реагируем,
+# но не ждём полминуты на реально мёртвый ход.
+SPEAKING_STUCK_SECONDS  = 15.0
 THINKING_STUCK_SECONDS  = 12.0
 TOOL_IDLE_SECONDS       = 60.0
 WATCHDOG_INTERVAL       = 0.5

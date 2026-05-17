@@ -51,12 +51,17 @@ try:
 except (Exception, SystemExit) as e:
     _PYAUTOGUI = None
     _PYAUTOGUI_ERROR = e
+    _log.warn("pyautogui unavailable: %s", e)
 
 try:
     import pyperclip as _pyperclip_mod
     _PYPERCLIP: _Pyperclip | None = _pyperclip_mod
 except ImportError:
     _PYPERCLIP = None
+
+# Предупреждаем об отсутствии GUI-бэкенда ровно один раз на весь процесс.
+# Без этого ``_gui()`` спамил WARN на каждый keypress на Linux без X-сервера.
+_GUI_WARN_FIRED = False
 
 
 def type_text(text: str, *, clear_first: bool = False) -> None:
@@ -133,8 +138,10 @@ def _clear_field() -> None:
 
 
 def _gui() -> _PyAutoGui | None:
-    if _PYAUTOGUI is None:
+    global _GUI_WARN_FIRED
+    if _PYAUTOGUI is None and not _GUI_WARN_FIRED:
         _log.warn("pyautogui unavailable: %s", _PYAUTOGUI_ERROR)
+        _GUI_WARN_FIRED = True
     return _PYAUTOGUI
 
 

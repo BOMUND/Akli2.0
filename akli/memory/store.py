@@ -24,7 +24,6 @@ from pathlib import Path
 from akli.core.config import (
     LEGACY_MEMORY_FILE,
     MEMORY_FILE,
-    RECENT_FILE,
     STATE_MEMORY_LEGACY_FILE,
 )
 from akli.utils.log import get_logger
@@ -45,6 +44,8 @@ class MemoryStore:
 
     def _load(self) -> None:
         # Миграция со старых расположений в state/core_memory.json.
+        # После успешного копирования старый файл удаляем, чтобы он не висел
+        # вечно рядом с актуальным.
         for legacy_path in (STATE_MEMORY_LEGACY_FILE, LEGACY_MEMORY_FILE):
             if self._path.exists() or not legacy_path.exists():
                 continue
@@ -55,6 +56,10 @@ class MemoryStore:
                     encoding="utf-8",
                 )
                 _log.info("Мигрирован legacy memory → %s", self._path.name)
+                try:
+                    legacy_path.unlink()
+                except OSError as e:
+                    _log.debug("unable to remove legacy memory %s: %s", legacy_path.name, e)
             except Exception as e:
                 _log.warn("legacy memory migration failed: %s", e)
 
@@ -164,86 +169,6 @@ class MemoryStore:
             if removed:
                 size = len(str(removed.get("value", ""))) if isinstance(removed, dict) else 0
                 total -= size
-
-
-class RecentStore:
-    """Скользящее окно из последних N session-summary.
-
-    Записывается ``recent.json``::
-
-        {
-          "items": [
-            {"ts": "2026-05-14T...", "text": "Обсуждали проект X..."},
-            ...
-          ]
-        }
-    """
-
-    MAX_ITEMS = 8
-
-    def __init__(self, path: Path | None = None) -> None:
-        self._path = path or RECENT_FILE
-        self._lock = threading.Lock()
-        self._items: list[dict] = []
-        self._load()
-
-    def _load(self) -> None:
-        if not self._path.exists():
-            return
-        try:
-            data = json.loads(self._path.read_text(encoding="utf-8"))
-            self._items = list(data.get("items") or [])
-        except Exception as e:
-            _log.warn("recent.json corrupt, reset: %s", e)
-            self._items = []
-
-    def _save_locked(self) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(
-            prefix=self._path.name + ".",
-            suffix=".tmp",
-            dir=str(self._path.parent),
-        )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump({"items": self._items}, f, ensure_ascii=False, indent=2)
-            os.replace(tmp, self._path)
-        except Exception:
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
-            raise
-
-    def add(self, text: str) -> None:
-        text = (text or "").strip()
-        if not text:
-            return
-        with self._lock:
-            self._items.append({
-                "ts":   datetime.now().isoformat(timespec="seconds"),
-                "text": text,
-            })
-            # Окно: оставляем только N самых свежих.
-            if len(self._items) > self.MAX_ITEMS:
-                self._items = self._items[-self.MAX_ITEMS:]
-            try:
-                self._save_locked()
-            except Exception as e:
-                _log.warn("recent save failed: %s", e)
-
-    def format_for_prompt(self) -> str:
-        with self._lock:
-            if not self._items:
-                return ""
-            lines = ["[RECENT SESSIONS]"]
-            for it in self._items[-self.MAX_ITEMS:]:
-                ts   = it.get("ts", "")[:10]
-                text = it.get("text", "").strip()
-                if not text:
-                    continue
-                lines.append(f"- {ts}: {text}")
-            return "\n".join(lines) + "\n"
 
 
 def _merge(dst: dict, patch: dict) -> None:

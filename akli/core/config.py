@@ -25,10 +25,16 @@ _log = get_logger("config")
 
 
 def _base_dir() -> Path:
-    """Корень проекта (либо рядом с exe в frozen-режиме)."""
-    if bool(sys.__dict__.get("frozen", False)):
+    """Корень проекта (либо рядом с exe в frozen-режиме).
+
+    Файл лежит в ``akli/core/config.py``, поэтому корень проекта — это
+    ``parent.parent.parent`` (а не ``.parent.parent``). До переноса в
+    ``core/`` тут хватало двух уровней — мы поправили путь, чтобы
+    ``state/`` и ``config/`` снова жили в корне проекта.
+    """
+    if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
-    return Path(__file__).resolve().parent.parent
+    return Path(__file__).resolve().parent.parent.parent
 
 
 BASE_DIR    = _base_dir()
@@ -41,12 +47,11 @@ MEMORY_FILE = STATE_DIR / "core_memory.json"
 STATE_MEMORY_LEGACY_FILE = STATE_DIR / "memory.json"
 REMINDERS_FILE = STATE_DIR / "reminders.json"
 APPCACHE_FILE  = STATE_DIR / "appcache.json"
-# Память: сырые транскрипты сессий (необработанные диалоги) и скользящее
-# окно summary прошлых сессий. Хранится прямо в STATE_DIR, не удаляется
-# никогда — текст по 50 КБ за час разговора, диск выдержит.
+# Память: сырые транскрипты сессий (необработанные диалоги) + один markdown файл
+# summary на каждый обработанный диалог. Хранится прямо в STATE_DIR, не
+# удаляется никогда — текст по 50 КБ за час разговора, диск выдержит.
 DIALOGS_DIR = STATE_DIR / "dialogs"
 DIALOG_SUMMARIES_DIR = STATE_DIR / "dialog_summaries"
-RECENT_FILE = STATE_DIR / "recent.json"
 
 LEGACY_PROMPT_FILE = BASE_DIR / "core" / "prompt.txt"
 LEGACY_MEMORY_FILE = BASE_DIR / "memory" / "long_term.json"
@@ -88,10 +93,13 @@ def _atomic_write(path: Path, data: str) -> None:
         raise
 
 
-# Модели, которые были в предыдущих версиях как дефолт, но больше не работают
-# на v1beta. При загрузке старого конфига эти значения заменяем на дефолт.
+# Старые значения дефолта, которые мы при загрузке заменяем на актуальный
+# дефолт. ``gemini-live-2.5-flash-preview`` — это half-cascade модель, она
+# работает (Mark XXXIX её использует), но для русского голоса native-audio
+# звучит лучше — поэтому считаем её устаревшим выбором и обновляем у
+# тех, кто унаследовал её из старого конфига. UI-toggle «быстрый режим»
+# (half-cascade) добавим отдельно.
 _BROKEN_LIVE_MODELS = {
-    "gemini-live-2.5-flash-preview",        # отключён в dev API
     "gemini-2.0-flash-live-001",            # рабочий, но хуже по голосу
 }
 

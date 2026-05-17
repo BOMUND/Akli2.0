@@ -7,10 +7,11 @@ __pycache__/
 config/akli.json
 config/api_keys.json
 state/memory.json
+state/core_memory.json
 state/reminders.json
 state/appcache.json
-state/recent.json
 state/dialogs/
+state/dialog_summaries/
 memory/memory.json
 
 # Virtualenvs / IDE

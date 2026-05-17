@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 
 from akli.memory.extract import analyze_session_memory
-from akli.memory.store import MemoryStore, RecentStore
+from akli.memory.store import MemoryStore
 from akli.memory.summaries import DialogSummaryStore
 from akli.memory.transcript import list_unprocessed, mark_processed, read_transcript
 from akli.utils.log import get_logger
@@ -43,7 +43,6 @@ def _claim_processing(path: Path) -> Path | None:
 async def process_pending_transcripts(
     *,
     memory:           MemoryStore,
-    recent:           RecentStore,
     gemini_api_key:   str = "",
     openrouter_key:   str = "",
     openrouter_model: str = "google/gemma-3-27b-it:free",
