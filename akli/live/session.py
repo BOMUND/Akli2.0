@@ -147,12 +147,37 @@ class LiveSession:
         # модели, а не ввод пользователя. На полный сброс — reconnect.
         self._out_buf.clear()
         self._out_has_transcription = False
-        # Короткое окно: игнорить любой чанк/текст от сервера, который успел уже
-        # вылететь до того, как interrupt дошёл. Сервер по факту вышлет свой
-        # ``interrupted=True`` в ближайшие ~100–300 мс — этого хватает.
-        self._ignore_output_until = time.monotonic() + 0.5
+        # Длинное окно «игнорить весь output до конца текущего turn-а».
+        # Раньше тут стояло +0.5 сек, что покрывало только мгновенно ушедшие
+        # чанки. Сервер же продолжает СТРИМИТЬ оставшиеся 5–20 сек речи,
+        # которые он уже сгенерировал, и пускал их в плеер после окончания
+        # ignore-окна — для пользователя выглядело как «отрубило на долю
+        # секунды, потом продолжил». Теперь игнорим до тех пор, пока
+        # сервер не подтвердит interrupted=True (через activity_start),
+        # либо не закроет turn_complete сам. Сброс ``_ignore_output_until``
+        # в recv_loop, см. ниже.
+        self._ignore_output_until = time.monotonic() + 120.0
         if self._player is not None:
             self._player.flush()
+        # Заодно сигналим серверу о barge-in: тот же путь, что делает
+        # ``automatic_activity_detection`` когда слышит пользователя.
+        # С ``activity_handling=START_OF_ACTIVITY_INTERRUPTS`` сервер
+        # обязан прервать генерацию и перестать слать аудио.
+        asyncio.create_task(self._signal_server_interrupt())
+
+    async def _signal_server_interrupt(self) -> None:
+        session = self._session
+        if session is None:
+            return
+        try:
+            await session.send_realtime_input(
+                activity_start=types.ActivityStart(),
+            )
+            await session.send_realtime_input(
+                activity_end=types.ActivityEnd(),
+            )
+        except Exception as e:
+            _log.debug("activity_start signal failed: %s", e)
 
     def request_reconnect(self) -> bool:
         """Жёстко пересоздать Gemini Live session вручную.
@@ -364,8 +389,14 @@ class LiveSession:
                     disabled=False,
                     start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_HIGH,
                     end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_HIGH,
-                    prefix_padding_ms=300,
-                    silence_duration_ms=500,
+                    # prefix_padding_ms=100 (с 300) и silence_duration_ms=300
+                    # (с 500) — экономим ~400 мс на каждом turn-е до момента,
+                    # когда сервер считает фразу пользователя законченной
+                    # и начинает отвечать. 300 мс молчания всё ещё больше
+                    # типичной паузы между словами (~150 мс), на breath-pause
+                    # пока в безопасной зоне.
+                    prefix_padding_ms=100,
+                    silence_duration_ms=300,
                 ),
                 activity_handling=types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
                 turn_coverage=types.TurnCoverage.TURN_INCLUDES_ALL_INPUT,
@@ -533,6 +564,8 @@ class LiveSession:
                         # Буфер ответа не сохраняем: это оборванная реплика.
                         self._out_buf.clear()
                         self._out_has_transcription = False
+                        # Сервер подтвердил interrupt → выключаем ignore-окно.
+                        self._ignore_output_until = 0.0
                         continue
 
                     in_tr = sc.input_transcription
@@ -568,6 +601,9 @@ class LiveSession:
                             if part.text and not self._out_has_transcription:
                                 self._out_buf.append(part.text)
                     if sc.turn_complete:
+                        # Сервер закрыл turn (либо естественно, либо после
+                        # interrupt) → выключаем ignore-окно для следующего хода.
+                        self._ignore_output_until = 0.0
                         self._state.on_turn_complete()
                         await self._on_turn_complete()
 

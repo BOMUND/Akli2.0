@@ -52,6 +52,53 @@ async def _remember_core(params: dict, ctx: ToolContext) -> str:
     return f"Saved to core memory: {category}.{key}"
 
 
+async def _forget_core(params: dict, ctx: ToolContext) -> str:
+    """Удалить факт из core memory.
+
+    Принимает явный ``key`` или свободный ``text`` (фраза
+    пользователя, по которой ищем в ``value``). Опциональный
+    ``category`` сужает поиск.
+    """
+    store = ctx.memory or MemoryStore()
+    snapshot = store.as_dict()
+    key = _clean_key(str(params.get("key") or ""))
+    text = str(params.get("text") or "").strip().lower()
+    category_param = str(params.get("category") or "").strip().lower()
+    categories = [category_param] if category_param in VALID_CATEGORIES else list(VALID_CATEGORIES)
+
+    removed: list[tuple[str, str]] = []
+    patch: dict = {}
+    for cat in categories:
+        block = snapshot.get(cat) or {}
+        if not isinstance(block, dict):
+            continue
+        for k, v in list(block.items()):
+            if not isinstance(v, dict):
+                continue
+            value = str(v.get("value") or "")
+            match = False
+            if key and _clean_key(k) == key:
+                match = True
+            elif text and text in value.lower():
+                match = True
+            if match:
+                patch.setdefault(cat, {})[k] = {"value": ""}
+                removed.append((cat, k))
+
+    if not removed:
+        return (
+            f"No matching fact found to forget (key={key!r}, text={text!r})."
+        )
+
+    store.update(patch)
+    msg = ", ".join(f"{cat}.{k}" for cat, k in removed)
+    try:
+        ctx.log(f"SYS: memory forgot ({msg})")
+    except Exception:
+        pass
+    return f"Forgot from core memory: {msg}"
+
+
 def _clean_key(raw: str) -> str:
     key = KEY_CHARS.sub("_", raw.strip().lower())
     key = re.sub(r"_+", "_", key).strip("_.-")
@@ -86,5 +133,16 @@ SPECS: list[ToolSpec] = [
         },
         _remember_core,
         required=["text"],
+    ),
+    make_spec(
+        "memory_forget_core",
+        "Remove a fact from core memory when the user explicitly asks to forget it. "
+        "Pass either the exact key (preferred) or a text snippet that appears in the fact's value.",
+        {
+            "key": {"type": "string", "description": "Exact stable key of the fact to remove (preferred)."},
+            "text": {"type": "string", "description": "Substring to match against fact values when key is unknown."},
+            "category": {"type": "string", "description": "Optional: identity, preferences, or notes."},
+        },
+        _forget_core,
     ),
 ]
