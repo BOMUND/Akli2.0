@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -56,7 +58,11 @@ class SetupDialog(QDialog):
         # OS
         layout.addWidget(self._label("Operating system:"))
         self._os = QComboBox()
-        self._os.addItems(["windows", "macos", "linux"])
+        # Порядок/имена совпадают с докой ``AppConfig.os_system`` ("windows" | "mac" | "linux").
+        # Раньше было "macos" — миграция в ``config.load_config`` сохраняет "mac",
+        # но новые установки из диалога раньше писали "macos" — любой будущий
+        # ``if os == "mac":`` тихо отвалился бы для них.
+        self._os.addItems(["windows", "mac", "linux"])
         if current.os_system:
             idx = self._os.findText(current.os_system)
             if idx >= 0:
@@ -114,7 +120,13 @@ class SetupDialog(QDialog):
         self.accept()
 
     def result_config(self, current: AppConfig) -> AppConfig:
-        return AppConfig(
+        # ``replace`` сохраняет все остальные поля текущего конфига как есть
+        # (``gemini_live_model``, ``gemini_voice_name``, ``mic_index``,
+        # ``speaker_index``, и всё будущее что не редактируется в диалоге).
+        # Без этого повторный setup (после сброса ``os_system``) тихо
+        # возвращал модель/голос/устройства к дефолтам датакласса.
+        return replace(
+            current,
             gemini_api_key     = self._gemini.text().strip(),
             openrouter_api_key = self._or_key.text().strip() if self._use_or.isChecked() else "",
             use_openrouter     = bool(self._use_or.isChecked() and self._or_key.text().strip()),

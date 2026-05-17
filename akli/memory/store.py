@@ -174,14 +174,29 @@ class MemoryStore:
 def _merge(dst: dict, patch: dict) -> None:
     now = datetime.now().isoformat(timespec="seconds")
     for k, v in patch.items():
+        # Явное удаление на верхнем уровне: ``{"key": None}`` / ``""`` / ``{}``.
         if v in (None, "", {}):
             dst.pop(k, None)
             continue
         if isinstance(v, dict):
-            cur = dst.setdefault(k, {})
-            if "value" in v and not any(isinstance(vv, dict) for vv in v.values()):
-                cur.update({"value": v["value"], "ts": v.get("ts", now)})
+            # Leaf-дикт вида ``{"value": ...}`` — это не вложенная структура,
+            # а факт с мета-полями. LLM по промпту удаляет факт через
+            # ``{"key": {"value": ""}}`` — это тоже надо ловить, иначе в JSON
+            # растёт зомби-запись со свежим ``ts``, которая при _trim_locked()
+            # выселяет валидные старые факты (сортировка по ts).
+            is_leaf = (
+                "value" in v
+                and not any(isinstance(vv, dict) for vv in v.values())
+            )
+            if is_leaf:
+                val = v.get("value")
+                if val in (None, ""):
+                    dst.pop(k, None)
+                else:
+                    cur = dst.setdefault(k, {})
+                    cur.update({"value": val, "ts": v.get("ts", now)})
             else:
+                cur = dst.setdefault(k, {})
                 _merge(cur, v)
         else:
             dst[k] = {"value": v, "ts": now}

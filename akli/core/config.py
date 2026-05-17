@@ -115,6 +115,11 @@ def load() -> AppConfig:
                           cfg.gemini_live_model, AppConfig().gemini_live_model)
                 cfg.gemini_live_model = AppConfig().gemini_live_model
                 save(cfg)
+            # Старые версии SetupDialog писали "macos" вместо канонического "mac",
+            # которое документировано в ``os_system``. Нормализуем тихо.
+            if cfg.os_system == "macos":
+                cfg.os_system = "mac"
+                save(cfg)
             return cfg
         except Exception as e:
             _log.warn("akli.json повреждён, использую дефолты: %s", e)
