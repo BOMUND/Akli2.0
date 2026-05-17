@@ -273,7 +273,16 @@ class PlayerStream:
             self._thread = None
 
     def flush(self) -> None:
-        """Сбрасывает невоспроизведённый хвост (нужно при реконнекте, фикс B7)."""
+        """Сбрасывает невоспроизведённый хвост (нужно при реконнекте, фикс B7).
+
+        Гарантирует, что после возврата:
+        * Queue пуст;
+        * ``state._chunks_in_flight`` обнулён (иначе фаза SPEAKING не
+          смогла бы корректно закрыться — чанки, выкинутые без drain,
+          навечно поддерживали бы счётчик > 0).
+        Поэтому **не** надо рядом с ``player.flush()`` делать ручной
+        сброс счётчика — он входит в инвариант flush.
+        """
         cleared = 0
         while True:
             try:
@@ -281,6 +290,7 @@ class PlayerStream:
                 cleared += 1
             except _stdqueue.Empty:
                 break
+        self._state.on_player_flushed()
         if cleared:
             _log.info("player flushed %d pending chunks", cleared)
 

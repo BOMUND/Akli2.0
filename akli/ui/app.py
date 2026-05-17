@@ -125,13 +125,22 @@ class AkliApp:
         # полностью в фоне, не блокирует запуск Live-сессии. При краше
         # прошлой сессии файлы лежали на диске без ``.done`` маркера —
         # теперь извлекаем факты + summary.
-        self._loop.create_task(process_pending_transcripts(
-            memory           = self._memory,
-            gemini_api_key   = self._config.gemini_api_key,
-            openrouter_key   = (self._config.openrouter_api_key
-                                if self._config.use_openrouter else ""),
-            openrouter_model = self._config.openrouter_model,
-        ))
+        #
+        # ``loop.create_task`` без ``await`` означает fire-and-forget —
+        # любое необработанное исключение в задаче пропадёт молча. Поэтому
+        # оборачиваем в callback, который логирует исключение явно.
+        async def _bg_process_pending() -> None:
+            try:
+                await process_pending_transcripts(
+                    memory           = self._memory,
+                    gemini_api_key   = self._config.gemini_api_key,
+                    openrouter_key   = (self._config.openrouter_api_key
+                                        if self._config.use_openrouter else ""),
+                    openrouter_model = self._config.openrouter_model,
+                )
+            except Exception as e:
+                _log.error("background memory pipeline failed: %s", e, exc_info=True)
+        self._loop.create_task(_bg_process_pending())
         try:
             self._loop.run_until_complete(self._session.run())
         except Exception as e:

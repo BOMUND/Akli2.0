@@ -65,13 +65,17 @@ class SpeakingState:
     """Потокобезопасный держатель текущей фазы.
 
     Используется одновременно из audio-callback-а sounddevice (отдельный
-    поток ОС), из asyncio-loop-а Gemini Live, и из Qt-обработчиков. Поэтому
-    замок — ``threading.Lock``: он работает в обоих контекстах и здесь не
-    становится узким горлышком (все операции крошечные).
+    поток ОС), из asyncio-loop-а Gemini Live, и из Qt-обработчиков. Замок —
+    ``threading.RLock``: работает во всех трёх контекстах и в отличие от
+    ``Lock`` переживёт реентрантные захваты. Это важно для ``_switch``,
+    который зовёт пользовательский ``on_change`` внутри замка:
+    любой будущий колбэк, читающий ``self.phase`` (который тоже берёт
+    замок), не уйдёт в deadlock. Все операции крошечные — RLock не
+    будет узким горлышком.
     """
 
     def __init__(self, on_change: Callable[[Phase], None] | None = None) -> None:
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._phase: Phase = Phase.IDLE
         # Колбэк «надо немедленно очистить очередь плеера». Ставится
         # сессией после старта PlayerStream. Зовётся:
@@ -226,6 +230,17 @@ class SpeakingState:
             self._chunks_in_flight = max(0, self._chunks_in_flight - 1)
             self._last_audio_progress_at = time.monotonic()
             self._maybe_finish_speaking_locked()
+
+    def on_player_flushed(self) -> None:
+        """Плеер выкинул всю очередь не доиграв (interrupt/reconnect).
+
+        Чанки в Queue не пройдут через ``on_chunk_drained``, поэтому
+        счётчик надо обнулить здесь, иначе он навсегда останется выше
+        нуля и ``_maybe_finish_speaking_locked`` не отпустит фазу.
+        """
+        with self._lock:
+            self._chunks_in_flight = 0
+            self._last_audio_progress_at = time.monotonic()
 
     def on_turn_complete(self) -> None:
         with self._lock:

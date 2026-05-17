@@ -39,6 +39,12 @@ class _Browser:
     """Долгоживущий Playwright-инстанс."""
 
     def __init__(self) -> None:
+        # ``asyncio.Lock`` привязан к текущему running loop. Поскольку
+        # ``_get_browser`` зовётся только из ``_run`` (он async и крутится
+        # в event-loop ``LiveSession``), замок всегда захватывается из
+        # того же лупа. Если архитектура изменится и кто-то полезет за
+        # ``_browser`` из другого лупа — здесь будет тихий деадлок,
+        # тогда придётся явно прокинуть loop.
         self._lock = asyncio.Lock()
         self._playwright = None
         self._browser = None

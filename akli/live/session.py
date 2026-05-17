@@ -223,9 +223,12 @@ class LiveSession:
                 lived = time.monotonic() - connected_at
                 if lived >= SHORT_RUN_RESET_SEC:
                     backoff_idx = 0
-                else:
-                    backoff_idx = min(backoff_idx + 1, len(BACKOFF_SEQ) - 1)
+                # Сначала используем текущий индекс, потом инкрементируем для
+                # следующей попытки. Раньше инкремент шёл до индексации, из-за
+                # чего первая rapid-failure попытка сразу прыгала на
+                # BACKOFF_SEQ[1] = 2.0 c, минуя BACKOFF_SEQ[0] = 1.0 c.
                 delay = BACKOFF_SEQ[backoff_idx]
+                backoff_idx = min(backoff_idx + 1, len(BACKOFF_SEQ) - 1)
             _log.warn("reconnecting in %.1fs", delay)
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=delay)

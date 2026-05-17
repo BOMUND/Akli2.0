@@ -94,23 +94,72 @@ class Scheduler:
     # ─────────────────────────────── public API ──
 
     def restore(self) -> int:
-        """Поднимает все ранее сохранённые напоминалки на старте приложения."""
+        """Поднимает все ранее сохранённые напоминалки на старте приложения.
+
+        Если приложение упало / было убито между set-ом напоминалки и её
+        временем срабатывания — на следующем старте мы это видим. Раньше
+        всё, что просрочено больше чем на 5 сек, тихо выкидывалось — и
+        пользователь не знал, что что-то было запланировано. Теперь:
+
+        * напоминания из будущего → нормально планируем дальше;
+        * напоминания из ближайшего прошлого (≤ 5 минут) → стреляем сразу
+          с пометкой "(missed)", чтобы пользователь увидел, что было;
+        * напоминания, которые просрочены сильно (например, ноутбук
+          провёл неделю в спячке) → тоже сообщаем одним пакетом, но
+          без шума на каждое.
+        """
         items = self._load()
         now = datetime.now()
         survivors: list[Reminder] = []
+        very_late: list[Reminder] = []
+        late_threshold = timedelta(minutes=5)
         with self._lock:
             for r in items:
                 try:
                     dt = r.datetime_when()
                 except ValueError:
                     continue
-                if dt <= now - timedelta(seconds=5):
-                    # пропустили слишком давно — просто выкидываем
+                if dt > now:
+                    self._schedule_locked(r, (dt - now).total_seconds())
+                    survivors.append(r)
                     continue
-                self._schedule_locked(r, (dt - now).total_seconds())
-                survivors.append(r)
+                overdue = now - dt
+                if overdue <= late_threshold:
+                    # Стреляем сразу, не сохраняем в survivors.
+                    self._fire_now(r, missed=True)
+                else:
+                    very_late.append(r)
+            if very_late:
+                _log.warn("scheduler: %d просроченных напоминаний (>5 мин), "
+                          "стреляю одним сводным сообщением", len(very_late))
+                joined = "; ".join(r.message or "?" for r in very_late[:5])
+                if len(very_late) > 5:
+                    joined += f"; … (ещё {len(very_late) - 5})"
+                self._fire_now(
+                    Reminder(
+                        id      = f"missed-{int(now.timestamp())}",
+                        when    = now.isoformat(timespec="seconds"),
+                        message = f"Missed reminders: {joined}",
+                    ),
+                    missed=True,
+                )
             self._save(survivors)
         return len(survivors)
+
+    def _fire_now(self, r: Reminder, *, missed: bool = False) -> None:
+        """Немедленно отправить нотификацию (для просроченных при restore)."""
+        try:
+            r_for_fire = r
+            if missed and r.message and not r.message.startswith("(missed)") \
+                    and not r.message.startswith("Missed reminders:"):
+                r_for_fire = Reminder(
+                    id      = r.id,
+                    when    = r.when,
+                    message = f"(missed) {r.message}",
+                )
+            self._notify(r_for_fire)
+        except Exception as e:
+            _log.warn("missed-reminder notify failed: %s", e)
 
     def add(self, when_text: str, message: str) -> Reminder:
         now = datetime.now()
