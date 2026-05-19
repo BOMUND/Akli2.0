@@ -150,36 +150,11 @@ class LiveSession:
         self._out_buf.clear()
         self._out_has_transcription = False
         # Длинное окно «игнорить весь output до конца текущего turn-а».
-        # Раньше тут стояло +0.5 сек, что покрывало только мгновенно ушедшие
-        # чанки. Сервер же продолжает СТРИМИТЬ оставшиеся 5–20 сек речи,
-        # которые он уже сгенерировал, и пускал их в плеер после окончания
-        # ignore-окна — для пользователя выглядело как «отрубило на долю
-        # секунды, потом продолжил». Теперь игнорим до тех пор, пока
-        # сервер не подтвердит interrupted=True (через activity_start),
-        # либо не закроет turn_complete сам. Сброс ``_ignore_output_until``
-        # в recv_loop, см. ниже.
+        # Сервер может продолжать стримить уже сгенерированный хвост речи;
+        # локально выкидываем его до server interrupt или turn_complete.
         self._ignore_output_until = time.monotonic() + 120.0
         if self._player is not None:
             self._player.flush()
-        # Заодно сигналим серверу о barge-in: тот же путь, что делает
-        # ``automatic_activity_detection`` когда слышит пользователя.
-        # С ``activity_handling=START_OF_ACTIVITY_INTERRUPTS`` сервер
-        # обязан прервать генерацию и перестать слать аудио.
-        asyncio.create_task(self._signal_server_interrupt())
-
-    async def _signal_server_interrupt(self) -> None:
-        session = self._session
-        if session is None:
-            return
-        try:
-            await session.send_realtime_input(
-                activity_start=types.ActivityStart(),
-            )
-            await session.send_realtime_input(
-                activity_end=types.ActivityEnd(),
-            )
-        except Exception as e:
-            _log.debug("activity_start signal failed: %s", e)
 
     def mic_level_db(self) -> float:
         """Текущий уровень микрофона в dBFS. -60 если стрим выключен."""
@@ -214,13 +189,17 @@ class LiveSession:
         self._in_buf.clear()
         self._out_has_transcription = False
         self._clear_send_queue()
-        if self._player is not None:
-            self._player.flush()
-        # Ротация transcript — после фактического закрытия Live-сессии в run().
-        # Здесь не трогаем self._transcript, чтобы хвостовые события
-        # _recv_loop (которые сейчас ignored через ``_ignore_output_until``,
-        # но всё равно могут что-то ещё дописать) попали в правильный файл.
+        self._stop_streams_for_reconnect()
         asyncio.create_task(self._close_live_session())
+
+    def _stop_streams_for_reconnect(self) -> None:
+        if self._mic is not None:
+            self._mic.stop()
+            self._mic = None
+        if self._player is not None:
+            self._player.stop_now()
+            self._player = None
+        self._state.set_player_flush(lambda: None)
 
     async def _close_live_session(self) -> None:
         session = self._session
@@ -277,13 +256,11 @@ class LiveSession:
                 raise
             except Exception as e:
                 if self._stop.is_set():
-                    # _stop_watcher сам закрыл сессию — это штатный shutdown,
-                    # а не «крах».
                     _log.debug("session closed on shutdown: %s", e)
                 elif self._manual_reconnect_requested:
                     _log.info("manual reconnect closed live session")
                 else:
-                    _log.warn("session crashed: %s", e)
+                    _log.warn("session crashed: %s", e, exc_info=True)
                     self._ui_log(f"SYS: connection lost ({e})")
 
             if self._stop.is_set():

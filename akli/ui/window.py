@@ -1,16 +1,8 @@
 """Главное окно.
 
-Шапка — бренд + «⛑ STOP» (тула/речь) + «⚙ settings».
-Левая колонка — HUD-кружок с фазой + Mute/Reconnect.
+Шапка — бренд + «⚙ settings».
+Левая колонка — HUD-кружок с фазой + сетка runtime-кнопок.
 Правая — активити-лог и текстовый ввод.
-
-Кнопки Stop tool / Interrupt объединены в одну STOP в шапке:
-active во время TOOL/SPEAKING/MUTED-c-аудио. Были раньше
-две отдельные кнопки в sidebar — теперь одна точка входа (UX-рефакторинг).
-
-Никаких сложных layout-overrid-ов; всё через ``QHBoxLayout`` /
-``QVBoxLayout``. Это вторая попытка — старая версия (1500 строк)
-была переусложнена.
 """
 
 from __future__ import annotations
@@ -19,6 +11,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QKeyEvent
 from PyQt6.QtWidgets import (
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -32,17 +25,18 @@ from PyQt6.QtWidgets import (
 
 from akli.live.state import Phase, SpeakingState
 from akli.ui.hud import HudOrb
-from akli.ui.theme import color_for_phase, label_for_phase
+from akli.ui.theme import label_for_phase
 
 
 class MainWindow(QMainWindow):
     """Сигналы наружу — текст, mute и runtime-control кнопки."""
 
-    text_submitted    = pyqtSignal(str)
-    mute_toggled      = pyqtSignal()
-    stop_clicked      = pyqtSignal()      # сводная STOP в шапке (tool либо interrupt)
-    reconnect_clicked = pyqtSignal()
-    settings_clicked  = pyqtSignal()      # ⚙ в шапке
+    text_submitted      = pyqtSignal(str)
+    mute_toggled        = pyqtSignal()
+    stop_tool_clicked   = pyqtSignal()
+    interrupt_clicked   = pyqtSignal()
+    reconnect_clicked   = pyqtSignal()
+    settings_clicked    = pyqtSignal()      # ⚙ в шапке
 
     def __init__(self, state: SpeakingState) -> None:
         super().__init__()
@@ -85,15 +79,6 @@ class MainWindow(QMainWindow):
         h.addWidget(brand)
         h.addStretch(1)
 
-        self._header_stop_btn = QPushButton("⏹  STOP")
-        self._header_stop_btn.setObjectName("stop_header")
-        self._header_stop_btn.setEnabled(False)
-        self._header_stop_btn.setToolTip(
-            "Прервать текущее действие (тула или речь ассистента)."
-        )
-        self._header_stop_btn.clicked.connect(self.stop_clicked.emit)
-        h.addWidget(self._header_stop_btn)
-
         self._header_settings_btn = QPushButton("⚙")
         self._header_settings_btn.setObjectName("settings_btn")
         self._header_settings_btn.setToolTip("Settings")
@@ -120,18 +105,30 @@ class MainWindow(QMainWindow):
 
         v.addStretch(1)
 
-        # controls — STOP и Interrupt уехали в шапку (объединены в одну STOP).
-        # Здесь только Mute и Reconnect: это два режимных переключателя,
-        # разные по смыслу и частоте нажатия, путать их с STOP не надо.
-        controls = QHBoxLayout()
+        controls = QGridLayout()
+        controls.setHorizontalSpacing(8)
+        controls.setVerticalSpacing(8)
+
         self._mute_btn = QPushButton("Mute")
         self._mute_btn.clicked.connect(self.mute_toggled.emit)
-        controls.addWidget(self._mute_btn)
+        controls.addWidget(self._mute_btn, 0, 0)
+
+        self._stop_tool_btn = QPushButton("Stop tool")
+        self._stop_tool_btn.setObjectName("stop")
+        self._stop_tool_btn.setEnabled(False)
+        self._stop_tool_btn.clicked.connect(self.stop_tool_clicked.emit)
+        controls.addWidget(self._stop_tool_btn, 0, 1)
+
+        self._interrupt_btn = QPushButton("Interrupt")
+        self._interrupt_btn.setObjectName("stop")
+        self._interrupt_btn.setEnabled(False)
+        self._interrupt_btn.clicked.connect(self.interrupt_clicked.emit)
+        controls.addWidget(self._interrupt_btn, 1, 0)
 
         self._reconnect_btn = QPushButton("Reconnect")
         self._reconnect_btn.setEnabled(False)
         self._reconnect_btn.clicked.connect(self.reconnect_clicked.emit)
-        controls.addWidget(self._reconnect_btn)
+        controls.addWidget(self._reconnect_btn, 1, 1)
 
         v.addLayout(controls)
         return panel
@@ -178,16 +175,8 @@ class MainWindow(QMainWindow):
         ph = self._state.phase
         self._orb.set_phase(ph)
         self._phase_label.setText(label_for_phase(ph))
-        # STOP в шапке: активен в TOOL (бьёт тулу) и когда модель
-        # говорит/подходит (бьёт interrupt). MUTED+chunks_in_flight тоже
-        # попадает в is_model_active — иначе юзер не может заткнуть речь
-        # пока мъют не снят. См. ``SpeakingState.is_model_active``.
-        self._header_stop_btn.setEnabled(
-            ph is Phase.TOOL or self._state.is_model_active()
-        )
-        # Reconnect имеет смысл только когда есть активная сессия. На IDLE
-        # (старт приложения / окно между попытками реконнекта) кнопка
-        # вернёт "reconnect unavailable" — лучше сразу её дизейблить.
+        self._stop_tool_btn.setEnabled(ph is Phase.TOOL)
+        self._interrupt_btn.setEnabled(self._state.is_model_active())
         self._reconnect_btn.setEnabled(ph is not Phase.IDLE)
         self.set_mute_text(ph is Phase.MUTED)
 

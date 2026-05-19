@@ -120,18 +120,13 @@ class MicStream:
         if status:
             _log.debug("mic status: %s", status)
 
-        # Базовый гейт: фаза должна разрешать в принципе шевелить микро
-        # (то есть не MUTED и не IDLE). SPEAKING тоже разрешён — иначе
-        # пользователь не сможет перебить ответ голосом.
+        raw = bytes(indata)
+        rms = _rms_i16(raw)
+        self._last_level_db = max(-60.0, min(0.0, 20.0 * _log10_safe(rms / 32768.0)))
+
         phase = self._state.phase
         if phase in (Phase.IDLE, Phase.MUTED):
             return
-
-        raw = bytes(indata)
-        rms = _rms_i16(raw)
-        # Простой перевод в dBFS: 20*log10(rms/32768). Клампим для стабильной
-        # визуализации прогресс-бара в settings.
-        self._last_level_db = max(-60.0, min(0.0, 20.0 * _log10_safe(rms / 32768.0)))
 
         if phase is Phase.SPEAKING and ECHO_GATE_WHILE_SPEAKING:
             self._update_baseline(rms)
@@ -209,16 +204,25 @@ class MicStream:
     def start(self) -> None:
         if self._stream is not None:
             return
-        self._stream = sd.RawInputStream(
+        try:
+            self._stream = self._open_stream(self._device)
+        except Exception as e:
+            if self._device is None:
+                raise
+            _log.warn("mic open failed for device %s: %s; falling back to default", self._device, e)
+            self._stream = self._open_stream(None)
+        self._stream.start()
+        _log.info("mic stream started @ %d Hz (device=%s)", SEND_SAMPLE_RATE, self._device)
+
+    def _open_stream(self, device: int | None) -> sd.RawInputStream:
+        return sd.RawInputStream(
             samplerate = SEND_SAMPLE_RATE,
             channels   = CHANNELS,
             dtype      = "int16",
             blocksize  = CHUNK_FRAMES,
             callback   = self._on_audio,
-            device     = self._device,
+            device     = device,
         )
-        self._stream.start()
-        _log.info("mic stream started @ %d Hz", SEND_SAMPLE_RATE)
 
     def peek_level_db(self) -> float:
         """Текущий уровень микрофона в dBFS (-60…0)."""

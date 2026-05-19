@@ -65,19 +65,69 @@ OPENROUTER_MODELS = (
 )
 
 
-def _list_input_devices() -> list[tuple[int, str]]:
-    """Возвращает список входных устройств (index, name).
+def _preferred_hostapis(sd) -> set[int] | None:
+    try:
+        hostapis = sd.query_hostapis()
+    except Exception:
+        return None
+    wasapi = {
+        idx for idx, api in enumerate(hostapis)
+        if "WASAPI" in str(api.get("name", "")).upper()
+    }
+    if wasapi:
+        return wasapi
+    try:
+        default_input = int(sd.default.device[0])
+        if default_input >= 0:
+            return {int(sd.query_devices(default_input).get("hostapi", -1))}
+    except Exception:
+        pass
+    return None
 
-    Обёрнуто в try/except — если sounddevice/PortAudio упадёт на старте
-    (бывает на чистой Linux-машине без alsa-окружения), settings всё
-    равно должен открыться: просто покажет «default» вариант.
-    """
+
+def _clean_device_name(name: str) -> str:
+    return " ".join(name.replace("\r", " ").replace("\n", " ").split())
+
+
+def _skip_device_name(name: str) -> bool:
+    low = name.lower()
+    return any(
+        token in low
+        for token in ("loopback", "what u hear", "sound mapper", "primary sound")
+    )
+
+
+def _list_input_devices() -> list[tuple[int, str]]:
     try:
         import sounddevice as sd  # noqa: PLC0415
+        hostapis = _preferred_hostapis(sd)
         result: list[tuple[int, str]] = []
+        seen: set[str] = set()
         for idx, dev in enumerate(sd.query_devices()):
-            if dev.get("max_input_channels", 0) > 0:
-                result.append((idx, str(dev.get("name", f"dev #{idx}"))))
+            if int(dev.get("max_input_channels", 0)) <= 0:
+                continue
+            if (
+                hostapis is not None
+                and int(dev.get("hostapi", -1)) not in hostapis
+            ):
+                continue
+            name = _clean_device_name(str(dev.get("name", f"dev #{idx}")))
+            if not name or _skip_device_name(name):
+                continue
+            try:
+                sd.check_input_settings(
+                    device=idx,
+                    channels=1,
+                    dtype="int16",
+                    samplerate=16000,
+                )
+            except Exception:
+                continue
+            key = name.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append((idx, name))
         return result
     except Exception:
         return []
@@ -86,10 +136,34 @@ def _list_input_devices() -> list[tuple[int, str]]:
 def _list_output_devices() -> list[tuple[int, str]]:
     try:
         import sounddevice as sd  # noqa: PLC0415
+        hostapis = _preferred_hostapis(sd)
         result: list[tuple[int, str]] = []
+        seen: set[str] = set()
         for idx, dev in enumerate(sd.query_devices()):
-            if dev.get("max_output_channels", 0) > 0:
-                result.append((idx, str(dev.get("name", f"dev #{idx}"))))
+            if int(dev.get("max_output_channels", 0)) <= 0:
+                continue
+            if (
+                hostapis is not None
+                and int(dev.get("hostapi", -1)) not in hostapis
+            ):
+                continue
+            name = _clean_device_name(str(dev.get("name", f"dev #{idx}")))
+            if not name or _skip_device_name(name):
+                continue
+            try:
+                sd.check_output_settings(
+                    device=idx,
+                    channels=1,
+                    dtype="int16",
+                    samplerate=24000,
+                )
+            except Exception:
+                continue
+            key = name.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append((idx, name))
         return result
     except Exception:
         return []

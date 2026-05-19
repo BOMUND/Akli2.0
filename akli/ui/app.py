@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import QApplication
 
 from akli.core.config import AppConfig, load, save
 from akli.live.session import LiveSession
-from akli.live.state import Phase, SpeakingState
+from akli.live.state import SpeakingState
 from akli.memory.store import MemoryStore
 from akli.memory.processor import process_pending_transcripts
 from akli.tools import build_router
@@ -68,7 +68,8 @@ class AkliApp:
         self._window = MainWindow(self._state)
         self._window.text_submitted.connect(self._on_text)
         self._window.mute_toggled.connect(self._on_mute)
-        self._window.stop_clicked.connect(self._on_stop)
+        self._window.stop_tool_clicked.connect(self._on_stop_tool)
+        self._window.interrupt_clicked.connect(self._on_interrupt)
         self._window.reconnect_clicked.connect(self._on_reconnect)
         self._window.settings_clicked.connect(self._on_open_settings)
         self._window.show()
@@ -176,32 +177,21 @@ class AkliApp:
             self._window.set_mute_text(muted)
         self._bridge.log_line.emit(f"SYS: {'muted' if muted else 'unmuted'}")
 
-    def _on_stop(self) -> None:
-        """Сводная STOP в шапке.
-
-        Логика:
-        * фаза TOOL → бьём тулу;
-        * иначе (речь/MUTED-c-аудио) → interrupt;
-        * если живёт и тула и речь одновременно — редкий случай, бьём и то и другое.
-        """
+    def _on_stop_tool(self) -> None:
         if self._session is None:
             return
-        ph = self._state.phase
-        did_anything = False
-        if ph is Phase.TOOL:
-            ok = self._session.request_stop_tool()
-            did_anything |= ok
-            self._bridge.log_line.emit(
-                "SYS: stop signal sent" if ok else "SYS: no tool running"
-            )
-        if self._state.is_model_active():
-            ok = self._session.request_interrupt()
-            did_anything |= ok
-            self._bridge.log_line.emit(
-                "SYS: interrupt sent" if ok else "SYS: nothing to interrupt"
-            )
-        if not did_anything:
-            self._bridge.log_line.emit("SYS: nothing to stop")
+        ok = self._session.request_stop_tool()
+        self._bridge.log_line.emit(
+            "SYS: stop signal sent" if ok else "SYS: no tool running"
+        )
+
+    def _on_interrupt(self) -> None:
+        if self._session is None:
+            return
+        ok = self._session.request_interrupt()
+        self._bridge.log_line.emit(
+            "SYS: interrupt sent" if ok else "SYS: nothing to interrupt"
+        )
 
     def _on_reconnect(self) -> None:
         if self._session is not None:
