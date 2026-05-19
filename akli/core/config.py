@@ -69,6 +69,12 @@ class AppConfig:
     # livekit/agents#4414), либо хуже по голосу. Предыдущие жалобы на
     # эту модель оказались багом на нашей стороне (см. фикс в _recv_loop).
     gemini_live_model:  str  = "gemini-2.5-flash-native-audio-preview-12-2025"
+    # Имя голоса Gemini Live (Puck/Charon/Fenrir/Aoede/Kore/Leda).
+    # Редактируется в settings; смена требует reconnect.
+    gemini_voice_name:  str  = "Puck"
+    # Индексы sounddevice. -1 = дефолтные устройства системы.
+    mic_index:          int  = -1
+    speaker_index:      int  = -1
 
     def is_ready(self) -> bool:
         return bool(self.gemini_api_key) and bool(self.os_system)

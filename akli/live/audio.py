@@ -102,6 +102,10 @@ class MicStream:
         self.silent   = 0
         self.dropped  = 0
         self._last_stats_at  = 0.0
+        # Последний замеренный RMS в dBFS — читается из UI для
+        # полоски уровня в settings. Пишется в аудио-потоке, читается
+        # в GUI-потоке — расии не страшны: float64 атомарно на x86/ARM.
+        self._last_level_db: float = -60.0
 
         # Скользящий baseline RMS — используем только пока модель говорит,
         # чтобы отличить «эхо динамиков» от настоящего голоса.
@@ -116,15 +120,13 @@ class MicStream:
         if status:
             _log.debug("mic status: %s", status)
 
-        # Базовый гейт: фаза должна разрешать в принципе шевелить микро
-        # (то есть не MUTED и не IDLE). SPEAKING тоже разрешён — иначе
-        # пользователь не сможет перебить ответ голосом.
+        raw = bytes(indata)
+        rms = _rms_i16(raw)
+        self._last_level_db = max(-60.0, min(0.0, 20.0 * _log10_safe(rms / 32768.0)))
+
         phase = self._state.phase
         if phase in (Phase.IDLE, Phase.MUTED):
             return
-
-        raw = bytes(indata)
-        rms = _rms_i16(raw)
 
         if phase is Phase.SPEAKING and ECHO_GATE_WHILE_SPEAKING:
             self._update_baseline(rms)
@@ -202,16 +204,29 @@ class MicStream:
     def start(self) -> None:
         if self._stream is not None:
             return
-        self._stream = sd.RawInputStream(
+        try:
+            self._stream = self._open_stream(self._device)
+        except Exception as e:
+            if self._device is None:
+                raise
+            _log.warn("mic open failed for device %s: %s; falling back to default", self._device, e)
+            self._stream = self._open_stream(None)
+        self._stream.start()
+        _log.info("mic stream started @ %d Hz (device=%s)", SEND_SAMPLE_RATE, self._device)
+
+    def _open_stream(self, device: int | None) -> sd.RawInputStream:
+        return sd.RawInputStream(
             samplerate = SEND_SAMPLE_RATE,
             channels   = CHANNELS,
             dtype      = "int16",
             blocksize  = CHUNK_FRAMES,
             callback   = self._on_audio,
-            device     = self._device,
+            device     = device,
         )
-        self._stream.start()
-        _log.info("mic stream started @ %d Hz", SEND_SAMPLE_RATE)
+
+    def peek_level_db(self) -> float:
+        """Текущий уровень микрофона в dBFS (-60…0)."""
+        return self._last_level_db
 
     def stop(self) -> None:
         s = self._stream

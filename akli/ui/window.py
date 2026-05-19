@@ -1,11 +1,8 @@
 """Главное окно.
 
-Левая колонка — HUD-кружок с фазой. Правая — активити-лог. Снизу — поле
-ввода и action-кнопки: Mute, Stop tool, Interrupt, Reconnect.
-
-Никаких сложных layout-overrid-ов; всё через ``QHBoxLayout`` /
-``QVBoxLayout``. Это вторая попытка — старая версия (1500 строк)
-была переусложнена.
+Шапка — бренд + «⚙ settings».
+Левая колонка — HUD-кружок с фазой + сетка runtime-кнопок.
+Правая — активити-лог и текстовый ввод.
 """
 
 from __future__ import annotations
@@ -14,6 +11,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QKeyEvent
 from PyQt6.QtWidgets import (
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -27,17 +25,18 @@ from PyQt6.QtWidgets import (
 
 from akli.live.state import Phase, SpeakingState
 from akli.ui.hud import HudOrb
-from akli.ui.theme import color_for_phase, label_for_phase
+from akli.ui.theme import label_for_phase
 
 
 class MainWindow(QMainWindow):
     """Сигналы наружу — текст, mute и runtime-control кнопки."""
 
-    text_submitted    = pyqtSignal(str)
-    mute_toggled      = pyqtSignal()
-    stop_tool_clicked = pyqtSignal()
-    interrupt_clicked = pyqtSignal()
-    reconnect_clicked = pyqtSignal()
+    text_submitted      = pyqtSignal(str)
+    mute_toggled        = pyqtSignal()
+    stop_tool_clicked   = pyqtSignal()
+    interrupt_clicked   = pyqtSignal()
+    reconnect_clicked   = pyqtSignal()
+    settings_clicked    = pyqtSignal()      # ⚙ в шапке
 
     def __init__(self, state: SpeakingState) -> None:
         super().__init__()
@@ -56,12 +55,37 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         central = QWidget(self)
         self.setCentralWidget(central)
-        root = QHBoxLayout(central)
+        root = QVBoxLayout(central)
         root.setContentsMargins(16, 16, 16, 16)
-        root.setSpacing(16)
+        root.setSpacing(12)
 
-        root.addWidget(self._build_left(), 1)
-        root.addWidget(self._build_right(), 2)
+        root.addWidget(self._build_header())
+
+        body = QHBoxLayout()
+        body.setSpacing(16)
+        body.addWidget(self._build_left(), 1)
+        body.addWidget(self._build_right(), 2)
+        root.addLayout(body, 1)
+
+    def _build_header(self) -> QWidget:
+        bar = QFrame()
+        bar.setObjectName("header")
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(16, 10, 16, 10)
+        h.setSpacing(10)
+
+        brand = QLabel("Akli")
+        brand.setObjectName("brand")
+        h.addWidget(brand)
+        h.addStretch(1)
+
+        self._header_settings_btn = QPushButton("⚙")
+        self._header_settings_btn.setObjectName("settings_btn")
+        self._header_settings_btn.setToolTip("Settings")
+        self._header_settings_btn.setFixedWidth(40)
+        self._header_settings_btn.clicked.connect(self.settings_clicked.emit)
+        h.addWidget(self._header_settings_btn)
+        return bar
 
     def _build_left(self) -> QWidget:
         panel = QFrame()
@@ -81,28 +105,30 @@ class MainWindow(QMainWindow):
 
         v.addStretch(1)
 
-        # controls
-        controls = QHBoxLayout()
+        controls = QGridLayout()
+        controls.setHorizontalSpacing(8)
+        controls.setVerticalSpacing(8)
+
         self._mute_btn = QPushButton("Mute")
         self._mute_btn.clicked.connect(self.mute_toggled.emit)
-        controls.addWidget(self._mute_btn)
+        controls.addWidget(self._mute_btn, 0, 0)
 
-        self._stop_btn = QPushButton("Stop tool")
-        self._stop_btn.setObjectName("stop")
-        self._stop_btn.setEnabled(False)
-        self._stop_btn.clicked.connect(self.stop_tool_clicked.emit)
-        controls.addWidget(self._stop_btn)
+        self._stop_tool_btn = QPushButton("Stop tool")
+        self._stop_tool_btn.setObjectName("stop")
+        self._stop_tool_btn.setEnabled(False)
+        self._stop_tool_btn.clicked.connect(self.stop_tool_clicked.emit)
+        controls.addWidget(self._stop_tool_btn, 0, 1)
 
         self._interrupt_btn = QPushButton("Interrupt")
         self._interrupt_btn.setObjectName("stop")
         self._interrupt_btn.setEnabled(False)
         self._interrupt_btn.clicked.connect(self.interrupt_clicked.emit)
-        controls.addWidget(self._interrupt_btn)
+        controls.addWidget(self._interrupt_btn, 1, 0)
 
         self._reconnect_btn = QPushButton("Reconnect")
         self._reconnect_btn.setEnabled(False)
         self._reconnect_btn.clicked.connect(self.reconnect_clicked.emit)
-        controls.addWidget(self._reconnect_btn)
+        controls.addWidget(self._reconnect_btn, 1, 1)
 
         v.addLayout(controls)
         return panel
@@ -149,15 +175,8 @@ class MainWindow(QMainWindow):
         ph = self._state.phase
         self._orb.set_phase(ph)
         self._phase_label.setText(label_for_phase(ph))
-        self._stop_btn.setEnabled(ph is Phase.TOOL)
-        # Interrupt: разрешаем и в MUTED, если модель сейчас всё ещё что-то
-        # говорит (chunks_in_flight > 0). Иначе кнопка визуально серая,
-        # пользователь в недоумении: «почему не могу заткнуть, если в
-        # колонках бубнят».
+        self._stop_tool_btn.setEnabled(ph is Phase.TOOL)
         self._interrupt_btn.setEnabled(self._state.is_model_active())
-        # Reconnect имеет смысл только когда есть активная сессия. На IDLE
-        # (старт приложения / окно между попытками реконнекта) кнопка
-        # вернёт "reconnect unavailable" — лучше сразу её дизейблить.
         self._reconnect_btn.setEnabled(ph is not Phase.IDLE)
         self.set_mute_text(ph is Phase.MUTED)
 

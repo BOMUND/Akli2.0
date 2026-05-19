@@ -36,7 +36,9 @@ from akli.utils.log import get_logger
 
 _log = get_logger("live")
 
-VOICE_NAME  = "Puck"       # мужской голос Gemini Live
+# Дефолтный голос — используется если в конфиге пусто. Раньше это была
+# константа ``VOICE_NAME = "Puck"`` — теперь юзер меняет в settings.
+DEFAULT_VOICE_NAME = "Puck"       # мужской голос Gemini Live
 # 128 слотов × 64 мс = до ~8 сек буфера. Запас на временные замедления
 # сети, без переразрастания: backpressure при заполнении значит, что
 # либо сеть упала, либо WebSocket в бад-стейте — оба случая мы ловим в
@@ -148,36 +150,25 @@ class LiveSession:
         self._out_buf.clear()
         self._out_has_transcription = False
         # Длинное окно «игнорить весь output до конца текущего turn-а».
-        # Раньше тут стояло +0.5 сек, что покрывало только мгновенно ушедшие
-        # чанки. Сервер же продолжает СТРИМИТЬ оставшиеся 5–20 сек речи,
-        # которые он уже сгенерировал, и пускал их в плеер после окончания
-        # ignore-окна — для пользователя выглядело как «отрубило на долю
-        # секунды, потом продолжил». Теперь игнорим до тех пор, пока
-        # сервер не подтвердит interrupted=True (через activity_start),
-        # либо не закроет turn_complete сам. Сброс ``_ignore_output_until``
-        # в recv_loop, см. ниже.
+        # Сервер может продолжать стримить уже сгенерированный хвост речи;
+        # локально выкидываем его до server interrupt или turn_complete.
         self._ignore_output_until = time.monotonic() + 120.0
         if self._player is not None:
             self._player.flush()
-        # Заодно сигналим серверу о barge-in: тот же путь, что делает
-        # ``automatic_activity_detection`` когда слышит пользователя.
-        # С ``activity_handling=START_OF_ACTIVITY_INTERRUPTS`` сервер
-        # обязан прервать генерацию и перестать слать аудио.
-        asyncio.create_task(self._signal_server_interrupt())
 
-    async def _signal_server_interrupt(self) -> None:
-        session = self._session
-        if session is None:
-            return
-        try:
-            await session.send_realtime_input(
-                activity_start=types.ActivityStart(),
-            )
-            await session.send_realtime_input(
-                activity_end=types.ActivityEnd(),
-            )
-        except Exception as e:
-            _log.debug("activity_start signal failed: %s", e)
+    def mic_level_db(self) -> float:
+        """Текущий уровень микрофона в dBFS. -60 если стрим выключен."""
+        if self._mic is None:
+            return -60.0
+        return self._mic.peek_level_db()
+
+    def _voice_name(self) -> str:
+        return self._config.gemini_voice_name or DEFAULT_VOICE_NAME
+
+    @staticmethod
+    def _device_index(idx: int) -> int | None:
+        # ``-1`` в конфиге = «дефолтное устройство ОС», sounddevice ждёт None.
+        return None if idx is None or idx < 0 else idx
 
     def request_reconnect(self) -> bool:
         """Жёстко пересоздать Gemini Live session вручную.
@@ -198,13 +189,17 @@ class LiveSession:
         self._in_buf.clear()
         self._out_has_transcription = False
         self._clear_send_queue()
-        if self._player is not None:
-            self._player.flush()
-        # Ротация transcript — после фактического закрытия Live-сессии в run().
-        # Здесь не трогаем self._transcript, чтобы хвостовые события
-        # _recv_loop (которые сейчас ignored через ``_ignore_output_until``,
-        # но всё равно могут что-то ещё дописать) попали в правильный файл.
+        self._stop_streams_for_reconnect()
         asyncio.create_task(self._close_live_session())
+
+    def _stop_streams_for_reconnect(self) -> None:
+        if self._mic is not None:
+            self._mic.stop()
+            self._mic = None
+        if self._player is not None:
+            self._player.stop_now()
+            self._player = None
+        self._state.set_player_flush(lambda: None)
 
     async def _close_live_session(self) -> None:
         session = self._session
@@ -261,13 +256,11 @@ class LiveSession:
                 raise
             except Exception as e:
                 if self._stop.is_set():
-                    # _stop_watcher сам закрыл сессию — это штатный shutdown,
-                    # а не «крах».
                     _log.debug("session closed on shutdown: %s", e)
                 elif self._manual_reconnect_requested:
                     _log.info("manual reconnect closed live session")
                 else:
-                    _log.warn("session crashed: %s", e)
+                    _log.warn("session crashed: %s", e, exc_info=True)
                     self._ui_log(f"SYS: connection lost ({e})")
 
             if self._stop.is_set():
@@ -327,7 +320,7 @@ class LiveSession:
         model_id = self._config.gemini_live_model or AppConfig().gemini_live_model
         async with self._client.aio.live.connect(model=model_id, config=cfg) as session:
             self._session = session
-            _log.info("connected: %s, voice=%s", model_id, VOICE_NAME)
+            _log.info("connected: %s, voice=%s", model_id, self._voice_name())
             self._ui_log("SYS: Akli online.")
 
             # На реконнекте дочекинаем накопленный текст пользователя
@@ -370,7 +363,7 @@ class LiveSession:
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=VOICE_NAME),
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=self._voice_name()),
                 ),
             ),
             system_instruction=types.Content(
@@ -418,13 +411,18 @@ class LiveSession:
         if self._send_q is None:
             self._send_q = asyncio.Queue(maxsize=SEND_QUEUE)
         if self._player is None:
-            self._player = PlayerStream(self._state)
+            self._player = PlayerStream(self._state, device=self._device_index(self._config.speaker_index))
             self._player.start()
             # Дать state-watchdog'у доступ к player.flush — он сам решает,
             # когда нужен flush (interrupt от сервера, форс LISTENING).
             self._state.set_player_flush(self._player.flush)
         if self._mic is None:
-            self._mic = MicStream(self._state, self._send_q, self._loop)  # type: ignore[arg-type]
+            self._mic = MicStream(
+                self._state,
+                self._send_q,
+                self._loop,  # type: ignore[arg-type]
+                device=self._device_index(self._config.mic_index),
+            )
             self._mic.start()
 
     async def _teardown(self) -> None:

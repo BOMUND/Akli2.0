@@ -19,10 +19,11 @@ from PyQt6.QtWidgets import QApplication
 
 from akli.core.config import AppConfig, load, save
 from akli.live.session import LiveSession
-from akli.live.state import Phase, SpeakingState
+from akli.live.state import SpeakingState
 from akli.memory.store import MemoryStore
 from akli.memory.processor import process_pending_transcripts
 from akli.tools import build_router
+from akli.ui.settings import SettingsWindow
 from akli.ui.setup import SetupDialog
 from akli.ui.theme import GLOBAL_QSS
 from akli.ui.window import MainWindow
@@ -53,6 +54,9 @@ class AkliApp:
         self._session: Optional[LiveSession] = None
         self._thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        # Settings-окно живёт в фоне (non-modal), храним ссылку
+        # чтобы повторный клик на ⚙ приносил вверх существующее, а не плодил копии.
+        self._settings: Optional[SettingsWindow] = None
 
     # ───────────────────────────── public ──
 
@@ -67,6 +71,7 @@ class AkliApp:
         self._window.stop_tool_clicked.connect(self._on_stop_tool)
         self._window.interrupt_clicked.connect(self._on_interrupt)
         self._window.reconnect_clicked.connect(self._on_reconnect)
+        self._window.settings_clicked.connect(self._on_open_settings)
         self._window.show()
 
         self._start_session()
@@ -173,18 +178,20 @@ class AkliApp:
         self._bridge.log_line.emit(f"SYS: {'muted' if muted else 'unmuted'}")
 
     def _on_stop_tool(self) -> None:
-        if self._session is not None:
-            ok = self._session.request_stop_tool()
-            self._bridge.log_line.emit(
-                "SYS: stop signal sent" if ok else "SYS: no tool running"
-            )
+        if self._session is None:
+            return
+        ok = self._session.request_stop_tool()
+        self._bridge.log_line.emit(
+            "SYS: stop signal sent" if ok else "SYS: no tool running"
+        )
 
     def _on_interrupt(self) -> None:
-        if self._session is not None:
-            ok = self._session.request_interrupt()
-            self._bridge.log_line.emit(
-                "SYS: interrupt sent" if ok else "SYS: nothing to interrupt"
-            )
+        if self._session is None:
+            return
+        ok = self._session.request_interrupt()
+        self._bridge.log_line.emit(
+            "SYS: interrupt sent" if ok else "SYS: nothing to interrupt"
+        )
 
     def _on_reconnect(self) -> None:
         if self._session is not None:
@@ -196,3 +203,51 @@ class AkliApp:
     def _on_log(self, line: str) -> None:
         if self._window is not None:
             self._window.append_log(line)
+
+    # ───────────────────────────── settings ──
+
+    def _on_open_settings(self) -> None:
+        if self._settings is not None and self._settings.isVisible():
+            self._settings.raise_()
+            self._settings.activateWindow()
+            return
+        # Передаём "живой" provider уровня микро — settings опрашивает
+        # его таймером, и видит реальный сигнал даже когда сессия
+        # переподключается под ним. Если сессии нет — отдаём -60 dB.
+        def _mic_level() -> float:
+            s = self._session
+            return s.mic_level_db() if s is not None else -60.0
+
+        self._settings = SettingsWindow(
+            config           = self._config,
+            memory           = self._memory,
+            mic_level_getter = _mic_level,
+            parent           = self._window,
+        )
+        self._settings.config_changed.connect(self._on_config_changed)
+        self._settings.reconnect_required.connect(self._on_settings_reconnect)
+        self._settings.show()
+
+    def _on_config_changed(self, new_cfg: AppConfig) -> None:
+        self._config = new_cfg
+        save(new_cfg)
+        # Мутируем поля "живого" конфига, чтобы сессия (которая держит
+        # ссылку на тот же объект через ``self._session._config``) сразу
+        # увидела новые ключи / voice / mic. Без этого пришлось бы
+        # пересоздавать LiveSession целиком.
+        if self._session is not None:
+            for fld in (
+                "gemini_api_key", "openrouter_api_key", "use_openrouter",
+                "openrouter_model", "gemini_voice_name", "mic_index",
+                "speaker_index", "gemini_live_model", "os_system",
+            ):
+                setattr(self._session._config, fld, getattr(new_cfg, fld))
+        self._bridge.log_line.emit("SYS: settings applied")
+
+    def _on_settings_reconnect(self) -> None:
+        if self._session is None:
+            return
+        ok = self._session.request_reconnect()
+        self._bridge.log_line.emit(
+            "SYS: settings → reconnect" if ok else "SYS: reconnect unavailable"
+        )
