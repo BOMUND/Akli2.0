@@ -146,7 +146,12 @@ class MicStream:
             "data":      raw,
             "mime_type": f"audio/pcm;rate={SEND_SAMPLE_RATE}",
         }
-        self._loop.call_soon_threadsafe(self._enqueue, payload)
+        try:
+            if not self._loop.is_closed():
+                self._loop.call_soon_threadsafe(self._enqueue, payload)
+        except RuntimeError:
+            # Loop closed between check and call — ignore silently.
+            pass
 
     def _update_baseline(self, rms: float) -> None:
         buf = self._baseline_buf
